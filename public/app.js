@@ -195,7 +195,7 @@ function renderLogin() {
       <img src="/logo.png" alt="Mar Thoma Church emblem — Lighted to Lighten">
       <h1>Kalamela 2026<br>Attendance &amp; Venue Tracker</h1>
       <p>Ernakulam Yuvajana Sakhyam. Mark participants at each venue and follow every participant through the day.</p>
-      <div class="login-facts"><div><b>4</b><span>Venues</span></div><div><b>42</b><span>Events</span></div><div><b>127</b><span>Participants</span></div></div>
+      <div class="login-facts"><div><b>5</b><span>Venues</span></div><div><b>42</b><span>Events</span></div><div><b>127</b><span>Participants</span></div></div>
     </section>
     <section class="login-form">
       <form class="login-card" id="login-form" autocomplete="off">
@@ -278,9 +278,9 @@ function progress(c, total) {
     <div class="legend"><span><span class="d" style="background:var(--green)"></span><b>${c.present}</b> present</span><span><span class="d" style="background:var(--blue)"></span><b>${c.done}</b> performed</span><span><span class="d" style="background:var(--red)"></span><b>${c.absent}</b> absent</span><span><span class="d" style="background:var(--line-2)"></span><b>${c.waiting}</b> waiting</span></div>`;
 }
 function timeline() {
-  const T0 = 8 * 60 + 30, T1 = 18 * 60 + 30, span = T1 - T0, n = nowMin();
+  const T0 = 8 * 60 + 30, T1 = 19 * 60 + 30, span = T1 - T0, n = nowMin();
   const x = m => (Math.min(Math.max(m, T0), T1) - T0) / span * 100;
-  const ticks = []; for (let h = 9; h <= 18; h++) ticks.push(`<span class="tl-tick" style="left:${x(h * 60)}%">${h > 12 ? h - 12 : h} ${h >= 12 ? "PM" : "AM"}</span>`);
+  const ticks = []; for (let h = 9; h <= 19; h++) ticks.push(`<span class="tl-tick" style="left:${x(h * 60)}%">${h > 12 ? h - 12 : h} ${h >= 12 ? "PM" : "AM"}</span>`);
   const grid = `background-image:linear-gradient(to right,var(--line) 0 1px,transparent 1px);background-size:${100 / (span / 60)}% 100%;background-position:${x(9 * 60)}% 0`;
   const now = lbl => n >= T0 && n <= T1 ? `<div class="tl-now" style="left:${x(n)}%">${lbl ? `<span>${fmt(n)}</span>` : ""}</div>` : "";
   const rows = BOOT.venues.map(v => {

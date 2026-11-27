@@ -52,7 +52,7 @@ def main():
     for ip in lan_ips():
         print(f"  Phones / tablets:    http://{ip}:{a.port}   (same Wi-Fi)")
     print("\n  Sign-in codes:  admin " + (codes["admin"] or kalamela.env_admin_code() or "(not set)") + " | "
-          + " | ".join(f"{k} {codes.get(k, '')}" for k in ("V1", "V2", "V3", "V4")))
+          + " | ".join(f"{k} {codes.get(k, '')}" for k in ("V1", "V2", "V3", "V4", "V5")))
     print("  Database: " + ("Postgres (DATABASE_URL)" if kalamela.PG_URL else kalamela.SQLITE_PATH))
     print("  Keep this window open. Press Ctrl+C to stop.\n", flush=True)
     try:

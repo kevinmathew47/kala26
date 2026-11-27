@@ -39,7 +39,7 @@ ON_VERCEL = bool(os.environ.get("VERCEL"))
 SQLITE_PATH = os.environ.get("KALAMELA_DB", os.path.join(ROOT, "kalamela.db"))
 IST = timezone(timedelta(hours=5, minutes=30))  # event times are India time
 
-VENUE_DEFAULT_CODES = {"V1": "CHURCH1", "V2": "BALCONY2", "V3": "SSHALL3", "V4": "FHALL4"}
+VENUE_DEFAULT_CODES = {"V1": "CHURCH1", "V2": "BALCONY2", "V3": "VESTRY3", "V4": "FHALL4", "V5": "GROUND5"}
 STATUSES = {"present", "done", "absent"}
 EVENT_STATES = {"upcoming", "live", "done"}
 SESSION_HOURS = 48

@@ -1,6 +1,6 @@
 # Kalamela 2026 – Attendance & Venue Tracker
 
-Venue desks for volunteers, a live admin dashboard, participant tracking across 4 venues,
+Venue desks for volunteers, a live admin dashboard, participant tracking across 5 venues,
 and admin-only Excel export for the Ernakulam Yuvajana Sakhyam Kalamela 2026.
 
 The same code runs in two ways:
@@ -66,8 +66,9 @@ Every `git push` to `main` redeploys automatically. Attendance in the database i
 |---|---|
 | CHURCH1 | V1 – Inside the Church |
 | BALCONY2 | V2 – Balcony |
-| SSHALL3 | V3 – Sunday School Hall / Vestry |
+| VESTRY3 | V3 – Vestry |
 | FHALL4 | V4 – Fellowship Hall |
+| GROUND5 | V5 – Ground Floor |
 
 Volunteers only see and mark their own venue. Only the admin can export Excel,
 edit the schedule, change codes or reset.
