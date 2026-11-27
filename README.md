@@ -1,42 +1,87 @@
 # Kalamela 2026 – Attendance & Venue Tracker
 
-## Start it
-Double-click **START-KALAMELA.bat**. The site opens at http://localhost:8000.
-Keep the black window open the whole day. Closing it stops the website.
+Venue desks for volunteers, a live admin dashboard, participant tracking across 4 venues,
+and admin-only Excel export for the Ernakulam Yuvajana Sakhyam Kalamela 2026.
 
-## Phones and tablets
-1. Connect them to the **same Wi-Fi** (or the laptop's hotspot) as the laptop.
-2. The black window shows a line like `Phones / tablets: http://192.168.1.5:8000`.
-   Open that address in Chrome on each device.
-3. If it doesn't open, allow Python through the Windows Firewall when Windows asks
-   (choose "Private networks").
+The same code runs in two ways:
 
-## Sign-in codes (change them in Settings)
-**Admin code:** not stored in this repository. Set the `KALAMELA_ADMIN_CODE` environment
-variable before starting, or the first start creates a random one and prints it in the black window.
+| | Online on Vercel | On a laptop |
+|---|---|---|
+| Who can open it | Anyone with the link, on any network | Devices on the same Wi-Fi |
+| Data stored in | Neon Postgres (free) | `kalamela.db` file |
+| Start | Deploy from GitHub | Double-click `START-KALAMELA.bat` |
 
-| Venue code | Opens |
+---
+
+## Deploy on Vercel
+
+### 1. Import the repository
+1. Sign in at https://vercel.com with GitHub.
+2. **Add New → Project**, pick **kala26**, then **Import**.
+3. Framework Preset: **Other**. Leave Build and Output settings empty.
+4. Don't deploy yet. Open **Environment Variables** first (step 3), or deploy now and redeploy after step 3.
+
+### 2. Add a database (free)
+1. In the Vercel project: **Storage → Create Database → Neon (Serverless Postgres)**.
+2. Choose the free plan and the region **Singapore** or **Mumbai** (closest to Kerala).
+3. Connect it to the project for **Production** and **Preview**.
+   This adds `DATABASE_URL` automatically. Tables are created on the first request.
+
+### 3. Set your admin code
+**Settings → Environment Variables → Add**
+- Name: `KALAMELA_ADMIN_CODE`
+- Value: your own secret code, at least 4 characters, e.g. `KM-7Q4X9P`
+
+The admin code is never stored in this repository. This variable always works as an admin
+login, even after you change codes in Settings, so you can't get locked out.
+
+### 4. Deploy
+**Deployments → Redeploy** (or push any commit). Open the `.vercel.app` link and sign in
+with your admin code.
+
+### 5. Before the event
+- **Settings → Sign-in codes:** change all four venue codes. The defaults below are public in this repository.
+  Saving new codes signs out every other device.
+- **Settings → Reset attendance** clears practice data.
+- Test with two phones: mark someone present on one, and watch the dashboard update on the other.
+
+### Updating
+Every `git push` to `main` redeploys automatically. Attendance in the database is kept.
+
+---
+
+## Run on a laptop instead
+1. Install Python 3.10 or newer, then once: `pip install -r requirements.txt`
+2. Double-click **START-KALAMELA.bat** and keep the black window open.
+3. The window shows the admin code (random on first start) and an address like
+   `http://192.168.1.5:8000` for phones on the same Wi-Fi.
+4. Allow Python through the Windows Firewall if asked (Private networks).
+
+---
+
+## Sign-in codes
+**Admin:** set `KALAMELA_ADMIN_CODE`, or on a laptop read it from the black window.
+
+| Default venue code | Opens |
 |---|---|
 | CHURCH1 | V1 – Inside the Church |
 | BALCONY2 | V2 – Balcony |
 | SSHALL3 | V3 – Sunday School Hall / Vestry |
 | FHALL4 | V4 – Fellowship Hall |
 
-## Excel
-Admin → **Export Excel** (top right) or **Reports & export**. Volunteers cannot download.
+Volunteers only see and mark their own venue. Only the admin can export Excel,
+edit the schedule, change codes or reset.
 
-## Before the real day
-Settings → **Reset attendance** clears all practice marks.
-All data is stored in `kalamela.db` in this folder. Copy it to keep a backup.
+## Excel export
+Admin → **Export Excel** (top right) or **Reports & export**. The sheets are:
+Summary, Attendance, Participants, Events and Activity log.
 
-## Online hosting (optional)
-The app also runs on a Python host (Render, Railway, a VPS).
-- Install: `pip install -r requirements.txt`
-- Start: `python server.py` (it reads the `PORT` environment variable)
-- Set `KALAMELA_DB` to a path on a persistent disk, or attendance is lost when the host restarts.
-- Set `KALAMELA_ADMIN_CODE` to your own admin code, and change the venue codes in Settings
-  straight after the first sign-in, because the default venue codes above are public.
-
-## Updating the participant list
-`tools/build_data.py` rebuilds `data.json` from the schedule PDF and master sheet:
-`python tools/build_data.py "<folder with the PDF and xlsx>"`, then copy `build/data.json` here.
+## Project layout
+```
+api/index.py          Vercel serverless entry point
+api/_lib/kalamela.py  backend (shared by Vercel and the laptop server)
+api/_lib/data.json    127 participants, 42 events (checked against the master sheet)
+public/               website (HTML, CSS, JS, logo)
+server.py             laptop server
+tools/build_data.py   rebuilds data.json from the schedule PDF and master sheet
+```

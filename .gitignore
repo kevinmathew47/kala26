@@ -1,6 +1,7 @@
-# live attendance database (created when the server runs)
+.claude/
 *.db
-*.db-journal
+*.db-*
 __pycache__/
 *.pyc
-.claude/
+.vercel/
+.env*
