@@ -1,0 +1,6 @@
+# live attendance database (created when the server runs)
+*.db
+*.db-journal
+__pycache__/
+*.pyc
+.claude/
