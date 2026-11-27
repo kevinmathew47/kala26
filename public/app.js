@@ -59,7 +59,7 @@ document.addEventListener("pointerdown", () => { try { AC = AC || new (window.Au
 
 /* ================= state ================= */
 let ME = null, BOOT = null, ONLINE = true, OFFSET = 0;
-const S = { version: 0, venues: [], evo: {}, cfg: {}, est: {}, att: {}, tmr: {}, sheets: {}, points: { ind: [5, 3, 1], grp: [15, 10, 5] } };
+const S = { version: 0, venues: [], evo: {}, cfg: {}, est: {}, att: {}, tmr: {}, sheets: {}, jnames: {}, points: { ind: [5, 3, 1], grp: [15, 10, 5] } };
 const MIN_PCT = 50, AWARD_MIN = 13;  // Kalamela Manual 2026: rules 8 and 6
 const ui = { venue: "V1", sel: null, q: "", filter: "all", person: null, confirm: null, navOpen: false, findQ: "", tab: {}, judge: {} };
 let VMAP = {}, PEOPLE = {};
@@ -251,7 +251,7 @@ async function poll(force) {
   try {
     const j = await api("/api/state?v=" + (force ? 0 : S.version));
     ONLINE = true; if (j.now) OFFSET = j.now - Date.now();
-    if (j.changed) { Object.assign(S, { version: j.version, venues: j.venues, evo: j.evo, cfg: j.cfg, est: j.est, att: j.att, tmr: j.tmr, sheets: j.sheets, points: j.points });
+    if (j.changed) { Object.assign(S, { version: j.version, venues: j.venues, evo: j.evo, cfg: j.cfg, est: j.est, att: j.att, tmr: j.tmr, sheets: j.sheets, jnames: j.jnames || {}, points: j.points });
       VMAP = Object.fromEntries(S.venues.map(v => [v.code, v])); render(); }
     else updateLive();
   } catch (e) { ONLINE = false; updateLive(); }
@@ -554,24 +554,28 @@ function entryRow(ev, en) {
 }
 
 /* ---------- judges' marks ---------- */
+const jn = (ev, j) => ((S.jnames[ev.id] || [])[j] || "");
 function marksPanel(ev) {
   const st = stateOf(ev.id), canEdit = isAdmin() || (ev.venue === ME.venue);
   if (st !== "done" && !isAdmin()) return `<div class="empty">Marks open when the event is finished. Press <b>Finish event</b> once every participant is done.</div>`;
   const J = ev.judges, j = Math.min(ui.judge[ev.id] ?? 0, J), sh = sheetOf(ev);
   const ents = ev.entries.filter(en => entryStatus(ev, keyOf(en)) !== "absent");
   const res = results(ev), rk = Object.fromEntries(res.map(r => [r.k, r]));
-  const jtabs = Array.from({ length: J }, (_, i) => `<button class="${j === i ? "on" : ""}" data-act="judge" data-e="${ev.id}" data-j="${i}">Judge ${i + 1}</button>`).join("") + `<button class="${j === J ? "on" : ""}" data-act="judge" data-e="${ev.id}" data-j="${J}">Total &amp; ranks</button>`;
+  const jtabs = Array.from({ length: J }, (_, i) => `<button class="${j === i ? "on" : ""}" data-act="judge" data-e="${ev.id}" data-j="${i}">Judge ${i + 1}${jn(ev, i) ? `<span class="jn">${esc(jn(ev, i))}</span>` : ""}</button>`).join("") + `<button class="${j === J ? "on" : ""}" data-act="judge" data-e="${ev.id}" data-j="${J}">Total &amp; ranks</button>`;
   const head = `<div class="marks-head"><div class="seg">${jtabs}</div><span class="grow"></span>
     <span class="judges">Judges <button class="btn sm" data-act="judges" data-e="${ev.id}" data-d="-1" ${J <= 1 || !canEdit ? "disabled" : ""} aria-label="One judge fewer">−</button><b>${J}</b><button class="btn sm" data-act="judges" data-e="${ev.id}" data-d="1" ${J >= 10 || !canEdit ? "disabled" : ""} aria-label="One judge more">+</button></span>
     <span class="muted save-state" id="save-${ev.id}">${DRAFT[ev.id] ? "Saving…" : "All marks saved"}</span></div>`;
   if (!ents.length) return head + `<div class="empty">Nobody took part, so there is nothing to mark.</div>`;
   if (j === J) {
-    return head + `<div class="table-wrap"><table class="t marks"><thead><tr><th>Rank</th><th>Chest / Team</th><th>Name</th>${Array.from({ length: J }, (_, i) => `<th class="num">Judge ${i + 1}</th>`).join("")}<th class="num">Total</th><th class="num">%</th></tr></thead><tbody>
+    return head + `<div class="table-wrap"><table class="t marks"><thead><tr><th>Rank</th><th>Chest / Team</th><th>Name</th>${Array.from({ length: J }, (_, i) => `<th class="num">Judge ${i + 1}${jn(ev, i) ? `<span class="mx">${esc(jn(ev, i))}</span>` : ""}</th>`).join("")}<th class="num">Total</th><th class="num">%</th></tr></thead><tbody>
       ${res.map(r => `<tr class="${r.rank && r.rank <= 3 ? "win r" + r.rank : ""}"><td>${!r.rank ? badge("absent", "Below 50%") : r.rank <= 3 ? `<span class="medal m${r.rank}">${r.rank}</span>` : r.rank}</td><td><b>${esc(r.k)}</b></td><td>${esc(nameOf(r.en))}<div class="sub">${esc(r.en.team ? teamParish(r.en) : (PEOPLE[r.k] || {}).parish)}</div></td>${r.totals.map(x => `<td class="num">${x ?? "–"}</td>`).join("")}<td class="num"><b>${r.total}</b></td><td class="num">${r.pct ?? "–"}</td></tr>`).join("") || `<tr><td colspan="${J + 5}" class="empty">No marks entered yet.</td></tr>`}
       </tbody></table></div><div class="card-b muted" style="font-size:12.5px">As per the Kalamela Manual, a participant needs at least ${MIN_PCT}% of the maximum marks to be placed and earn points. Points: ${S.points.ind.join(" / ")} for individual events, ${S.points.grp.join(" / ")} for group events.</div>`;
   }
   const crit = ev.criteria;
-  return head + `<div class="table-wrap"><table class="t marks"><thead><tr><th>Chest / Team</th>${crit.map(c => `<th class="num" title="${esc(c.name)}">${esc(c.name)}${c.max ? `<span class="mx">max ${c.max}</span>` : ""}</th>`).join("")}<th class="num">Total</th></tr></thead><tbody>
+  return head + `<div class="jname"><label for="jn-${ev.id}-${j}">Judge ${j + 1} name</label>
+    <input class="input" id="jn-${ev.id}-${j}" value="${esc(jn(ev, j))}" maxlength="60" placeholder="Type the judge's name" autocomplete="off" data-act="jname" data-e="${ev.id}" data-j="${j}" ${canEdit ? "" : "disabled"}>
+    <span class="muted">${jn(ev, j) ? "Saved" : "Appears on the judgment sheet in the Excel"}</span></div>
+  <div class="table-wrap"><table class="t marks"><thead><tr><th>Chest / Team</th>${crit.map(c => `<th class="num" title="${esc(c.name)}">${esc(c.name)}${c.max ? `<span class="mx">max ${c.max}</span>` : ""}</th>`).join("")}<th class="num">Total</th></tr></thead><tbody>
     ${ents.map(en => { const k = keyOf(en), row = ((sh[k] || [])[j]) || [];
       const tot = row.filter(x => typeof x === "number").reduce((a, b) => a + b, 0);
       return `<tr><td><b>${esc(k)}</b><div class="sub">${esc(en.team ? teamParish(en) : (PEOPLE[k] || {}).name || "")}</div></td>${crit.map((c, ci) => `<td class="num"><input class="input mark" type="number" inputmode="decimal" min="0" ${c.max ? `max="${c.max}"` : ""} step="0.5" value="${row[ci] ?? ""}" data-act="mark-in" data-e="${ev.id}" data-k="${esc(k)}" data-j="${j}" data-c="${ci}" ${canEdit ? "" : "disabled"} aria-label="${esc(k)} ${esc(c.name)} judge ${j + 1}"></td>`).join("")}<td class="num"><b id="tot-${ev.id}-${esc(k)}-${j}">${tot || ""}</b>${rk[k] && rk[k].rank && rk[k].rank <= 3 ? ` <span class="medal m${rk[k].rank}">${rk[k].rank}</span>` : ""}</td></tr>`; }).join("")}
@@ -836,6 +840,8 @@ document.addEventListener("change", e => {
   if (a === "ev-timer") eventCfg(id, { timer: +t.value || 0 });
   if (a === "ev-tmin") eventCfg(id, { timerMin: +t.value || 0 });
   if (a === "ev-judges") eventCfg(id, { judges: +t.value || 1 });
+  if (a === "jname") { const names = [...(S.jnames[id] || [])]; while (names.length <= +t.dataset.j) names.push(""); names[+t.dataset.j] = t.value.trim();
+    S.jnames[id] = names; api("/api/judge-names", { e: id, names }).then(() => { toast("Judge name saved"); return poll(true); }).catch(er => toast(er.message, true)); }
 });
 document.addEventListener("focusout", () => setTimeout(() => { if (pending && !isTyping()) render(); }, 0));
 document.addEventListener("submit", async e => {

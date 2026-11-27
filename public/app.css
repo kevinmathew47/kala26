@@ -656,3 +656,9 @@ select.input{appearance:none;-webkit-appearance:none;padding-right:34px;cursor:p
 .pk-pop,.picker.open::before{animation:none}
 .picker.anim .pk-pop{animation:pop .2s var(--ease)}
 @media (max-width:1023px){.picker.open .pk-pop{animation:none}.picker.anim .pk-pop{animation:sheet-up .3s var(--ease)}.picker.anim::before{animation:fade .2s ease}}
+.jname{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:12px 18px;border-bottom:1px solid var(--line)}
+.jname label{font-weight:600;font-size:13px;color:var(--ink-2)}
+.jname .input{flex:1 1 220px;max-width:360px}
+.jname .muted{font-size:12px}
+.seg button .jn{display:block;font-size:11px;font-weight:500;color:var(--muted);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media (max-width:767px){.jname{padding:12px}.jname .input{max-width:none;flex-basis:100%;min-height:44px}}

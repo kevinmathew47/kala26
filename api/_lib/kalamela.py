@@ -198,6 +198,7 @@ class Tx:
             "CREATE TABLE IF NOT EXISTS kl_timer(eid TEXT, k TEXT, started BIGINT, ended BIGINT, PRIMARY KEY(eid, k))",
             "CREATE TABLE IF NOT EXISTS kl_event_cfg(id TEXT PRIMARY KEY, timer REAL, timer_min REAL, judges INTEGER)",
             "CREATE TABLE IF NOT EXISTS kl_sheet(eid TEXT PRIMARY KEY, data TEXT, ts TEXT, actor TEXT)",
+            "CREATE TABLE IF NOT EXISTS kl_judges(eid TEXT PRIMARY KEY, names TEXT, ts TEXT, actor TEXT)",
         ):
             self.run(s)
         for i, v in enumerate(VENUES):
@@ -291,6 +292,7 @@ class Tx:
             "tmr": {r["eid"] + "--" + r["k"]: {"s": int(r["started"]) if r["started"] is not None else None,
                                                "e": int(r["ended"]) if r["ended"] is not None else None} for r in self.all("SELECT * FROM kl_timer")},
             "sheets": self.sheets(),
+            "jnames": {r["eid"]: json.loads(r["names"] or "[]") for r in self.all("SELECT eid,names FROM kl_judges")},
             "points": self.points(),
         }
 
@@ -459,7 +461,7 @@ def build_workbook(snap, acts, venue_name):
         "evs": evs, "people": PEOPLE, "status": status, "took": took, "att": att, "est": est, "acts": acts,
         "results": lambda ev: event_results(ev, snap["sheets"].get(ev["id"]), ev["judges"], lambda k: status(ev, k)),
         "champ": champ, "points": snap["points"], "venue_name": venue_name, "sheets": snap["sheets"],
-        "exported_at": now_iso(), "award_min": AWARD_MIN_POINTS})
+        "exported_at": now_iso(), "award_min": AWARD_MIN_POINTS, "jnames": snap.get("jnames", {})})
 
 
 # ------------------------------------------------------------------ HTTP handler
@@ -639,13 +641,16 @@ class Handler(BaseHTTPRequestHandler):
         def event_for_write(eid, allow_closed=False):
             ev = evs.get(eid)
             if not ev:
-                return None, self.json({"error": "Unknown event."}, 400)
+                self.json({"error": "Unknown event."}, 400)
+                return None, True  # response already sent; caller must stop
             if not admin and ev["venue"] != s["venue"]:
-                return None, self.json({"error": "This event is not at your venue."}, 403)
+                self.json({"error": "This event is not at your venue."}, 403)
+                return None, True  # response already sent; caller must stop
             if not admin and not allow_closed:
                 es = t.one("SELECT state FROM kl_event_state WHERE id=?", (eid,))
                 if es and es["state"] == "done":
-                    return None, self.json({"error": "This event is finished. Ask the admin to reopen it."}, 409)
+                    self.json({"error": "This event is finished. Ask the admin to reopen it."}, 409)
+                    return None, True  # response already sent; caller must stop
             return ev, None
 
         def entry_ok(ev, k):
@@ -750,6 +755,20 @@ class Handler(BaseHTTPRequestHandler):
                   "timer=excluded.timer, timer_min=excluded.timer_min, judges=excluded.judges",
                   (eid, new.get("timer"), new.get("timerMin"), new.get("judges")))
             t.log(who, "Event settings", eid, "", json.dumps({k: v for k, v in new.items()}))
+            t.bump()
+            return self.json({"ok": True})
+
+        if p == "/api/judge-names":  # venue volunteer or admin names the judges of an event
+            eid, names = b.get("e"), b.get("names")
+            ev, err = event_for_write(eid, allow_closed=True)
+            if err:
+                return err
+            if not isinstance(names, list):
+                return self.json({"error": "Nothing to save."}, 400)
+            clean = [str(n or "").strip()[:60] for n in names[:10]]
+            t.run("INSERT INTO kl_judges(eid,names,ts,actor) VALUES(?,?,?,?) ON CONFLICT(eid) DO UPDATE SET names=excluded.names, ts=excluded.ts, actor=excluded.actor",
+                  (eid, json.dumps(clean), now_iso(), who))
+            t.log(who, "Judge names", eid, "", ", ".join(n for n in clean if n))
             t.bump()
             return self.json({"ok": True})
 
@@ -888,7 +907,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.json({"ok": True})
 
         if p == "/api/reset":
-            for tbl in ("kl_attendance", "kl_event_state", "kl_timer", "kl_sheet"):
+            for tbl in ("kl_attendance", "kl_event_state", "kl_timer", "kl_sheet", "kl_judges"):
                 t.run(f"DELETE FROM {tbl}")
             t.log(who, "Reset attendance, timers and marks")
             t.bump()
@@ -898,7 +917,7 @@ class Handler(BaseHTTPRequestHandler):
             import random
             rnd = random.Random(7)
             now, ts = now_ms(), now_iso()
-            for tbl in ("kl_attendance", "kl_event_state", "kl_timer", "kl_sheet"):
+            for tbl in ("kl_attendance", "kl_event_state", "kl_timer", "kl_sheet", "kl_judges"):
                 t.run(f"DELETE FROM {tbl}")
             ph = "%s" if t.pg else "?"
             att, est, tmr, sheets = [], [], [], []

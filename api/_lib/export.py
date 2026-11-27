@@ -354,7 +354,9 @@ def build(ctx):
         entries = ev["entries"]
         for j in range(J):
             ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=ncol)
-            ws.cell(row=r, column=1, value=f"Judge {j + 1}").font = Font(bold=True, color=RED, size=11)
+            jn = (ctx.get("jnames", {}).get(ev["id"]) or [])
+            jname = jn[j] if j < len(jn) and jn[j] else ""
+            ws.cell(row=r, column=1, value=f"Judge {j + 1}" + (f" — {jname}" if jname else "")).font = Font(bold=True, color=RED, size=11)
             ws.cell(row=r, column=1).fill = SUB_FILL
             r += 1
             header_row(ws, r, ["S.No", "Chest No", "Name / Team", "Sakha (Parish)"] + [f"{c['name']}\n(Max {c['max']})" if c["max"] else c["name"] for c in crit]
@@ -388,7 +390,7 @@ def build(ctx):
                 ws.cell(row=rr, column=ncol, value=rank)
             style_table(ws, r0, r, 1, ncol)
             r += 2
-            ws.cell(row=r, column=1, value="Name of Judge: ____________________________________").font = Font(color=INK)
+            ws.cell(row=r, column=1, value="Name of Judge: " + (jname or "____________________________________")).font = Font(color=INK, bold=bool(jname))
             ws.cell(row=r, column=ncol - 3, value="Signature of Judge: ________________").font = Font(color=INK)
             r += 3
         # consolidated
@@ -396,8 +398,10 @@ def build(ctx):
         ws.cell(row=r, column=1, value="Consolidated Result").font = Font(bold=True, color=RED, size=11)
         ws.cell(row=r, column=1).fill = SUB_FILL
         r += 1
-        cons = ["S.No", "Chest No", "Name / Team", "Sakha (Parish)"] + [f"Judge {j + 1}" for j in range(J)] + ["Grand Total", "%", "Position", "Points"]
-        header_row(ws, r, cons, height=30)
+        jn_all = (ctx.get("jnames", {}).get(ev["id"]) or []) + [""] * J
+        cons = ["S.No", "Chest No", "Name / Team", "Sakha (Parish)"] + \
+               [f"Judge {j + 1}" + ("\n" + jn_all[j] if jn_all[j] else "") for j in range(J)] + ["Grand Total", "%", "Position", "Points"]
+        header_row(ws, r, cons, height=42 if any(jn_all[:J]) else 30)
         r0 = r + 1
         maxtot = sum(c["max"] for c in crit) * J
         for i, en in enumerate(entries, 1):
