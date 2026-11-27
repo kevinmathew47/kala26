@@ -17,7 +17,25 @@ from urllib.parse import parse_qs, unquote, urlparse
 LIB = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(LIB))
 PUBLIC = os.path.join(ROOT, "public")
-PG_URL = os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL") or ""
+def _find_pg_url():
+    """Neon/Vercel name the variable differently depending on how it was connected."""
+    for name in ("DATABASE_URL", "POSTGRES_URL", "NEON_DATABASE_URL", "POSTGRES_PRISMA_URL", "DATABASE_URL_UNPOOLED", "POSTGRES_URL_NON_POOLING"):
+        v = os.environ.get(name, "").strip()
+        if v.startswith(("postgres://", "postgresql://")):
+            return name, v
+    for name, v in sorted(os.environ.items()):  # e.g. STORAGE_DATABASE_URL from a custom prefix
+        v = v.strip()
+        if (name.endswith("DATABASE_URL") or name.endswith("POSTGRES_URL")) and v.startswith(("postgres://", "postgresql://")):
+            return name, v
+    for name, v in sorted(os.environ.items()):  # last resort: any postgres link, preferring pooled ones
+        v = v.strip()
+        if v.startswith(("postgres://", "postgresql://")) and "UNPOOLED" not in name and "NON_POOLING" not in name:
+            return name, v
+    return "", ""
+
+
+PG_ENV, PG_URL = _find_pg_url()
+ON_VERCEL = bool(os.environ.get("VERCEL"))
 SQLITE_PATH = os.environ.get("KALAMELA_DB", os.path.join(ROOT, "kalamela.db"))
 IST = timezone(timedelta(hours=5, minutes=30))  # event times are India time
 
@@ -48,6 +66,25 @@ def env_admin_code():
 
 
 # ------------------------------------------------------------------ database
+class SetupError(Exception):
+    pass
+
+
+def explain(err):
+    """A readable reason for a database failure, with anything secret removed."""
+    import re
+    if isinstance(err, SetupError):
+        return str(err)
+    msg = f"{type(err).__name__}: {err}"
+    msg = re.sub(r"postgres(ql)?://\S+", "postgres://…", msg)
+    if PG_URL:
+        u = urlparse(PG_URL)
+        for secret in (u.password, unquote(u.password or "")):
+            if secret:
+                msg = msg.replace(secret, "…")
+    return msg[:400]
+
+
 class Store:
     """Tiny wrapper so the same SQL runs on SQLite and Postgres ('?' params)."""
 
@@ -58,6 +95,9 @@ class Store:
         self.ready = False
 
     def _connect(self):
+        if not self.pg and ON_VERCEL:
+            raise SetupError("No database is connected. In Vercel open Storage, connect a Neon database to this project "
+                             "(Production), then Redeploy.")
         if self.pg:
             import ssl
             import pg8000.dbapi
@@ -65,7 +105,11 @@ class Store:
             q = parse_qs(u.query)
             ctx = None
             if (q.get("sslmode") or ["require"])[0] != "disable":
-                ctx = ssl.create_default_context()
+                try:
+                    import certifi
+                    ctx = ssl.create_default_context(cafile=certifi.where())
+                except ImportError:
+                    ctx = ssl.create_default_context()
             return pg8000.dbapi.connect(user=unquote(u.username or ""), password=unquote(u.password or ""),
                                         host=u.hostname, port=u.port or 5432, database=(u.path or "/postgres")[1:],
                                         ssl_context=ctx, timeout=15)
@@ -389,13 +433,35 @@ class Handler(BaseHTTPRequestHandler):
         return p, parse_qs(u.query)
 
     def fail(self, err):
-        self.json({"error": "The server could not reach its database. Try again in a moment." if not isinstance(err, PermissionError) else str(err)}, 503)
+        import sys, traceback
+        traceback.print_exc(file=sys.stderr)  # shows in Vercel → Logs
+        self.json({"error": "Database problem: " + explain(err)}, 503)
+
+    def health(self):
+        info = {"database": "postgres" if PG_URL else "sqlite", "database_env": PG_ENV or None, "on_vercel": ON_VERCEL,
+                "admin_code_env_set": bool(env_admin_code())}
+        if PG_URL:
+            u = urlparse(PG_URL)
+            info["database_host"] = u.hostname
+        try:
+            t0 = time.time()
+            with STORE.tx() as t:
+                cfg = t.config()
+            info.update(ok=True, ms=int((time.time() - t0) * 1000), admin_code_set=bool(codes_of(cfg)["admin"] or env_admin_code()))
+            return self.json(info)
+        except Exception as e:
+            import sys, traceback
+            traceback.print_exc(file=sys.stderr)
+            info.update(ok=False, error=explain(e))
+            return self.json(info, 503)
 
     # ---- GET
     def do_GET(self):
         p, q = self.route()
         if not p.startswith("/api/"):
             return self.static(p)
+        if p == "/api/health":
+            return self.health()
         try:
             with STORE.tx() as t:
                 cfg = t.config()
