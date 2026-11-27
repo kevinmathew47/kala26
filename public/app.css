@@ -500,3 +500,155 @@ table.marks th .mx{display:block;font-weight:500;color:var(--muted);font-size:11
   .toolbar .search{flex:1 1 100%}
   .topbar .btn.primary.sm{padding:5px 9px}
 }
+
+/* ================= v7: light red theme + glass ================= */
+:root{
+  --bg:#f6f6f9; --ink:#14161c; --ink-2:#3a3f4c; --muted:#6b7080; --line:#e7e8ee; --line-2:#d7d9e1;
+  --primary:#c8102e; --primary-h:#a50d26; --primary-soft:#fdebee;
+  --side:#ffffff; --side-ink:#3a3f4c; --side-muted:#8a8f9e;
+  --chart:#c8102e; --chart-soft:#f6c4cd;
+  --glass:rgba(255,255,255,.62); --glass-strong:rgba(255,255,255,.78); --glass-line:rgba(255,255,255,.75);
+  --glass-shadow:0 10px 40px rgba(20,22,28,.10),0 1px 0 rgba(255,255,255,.6) inset;
+  --blur:saturate(1.8) blur(18px);
+}
+/* soft aurora behind everything so the glass has something to frost */
+body{background:var(--bg)}
+body::before{content:"";position:fixed;inset:-20vh -10vw auto -10vw;height:70vh;z-index:-1;pointer-events:none;
+  background:radial-gradient(40% 55% at 12% 20%,rgba(200,16,46,.16),transparent 70%),
+             radial-gradient(35% 50% at 85% 10%,rgba(234,179,8,.16),transparent 70%),
+             radial-gradient(45% 60% at 55% 0%,rgba(244,114,182,.12),transparent 70%)}
+.app,.main{background:transparent}
+
+/* sidebar: light glass with a red active pill */
+.sidebar{background:var(--glass);backdrop-filter:var(--blur);-webkit-backdrop-filter:var(--blur);border-right:1px solid var(--line);color:var(--side-ink)}
+.side-brand{border-bottom:1px solid var(--line)}
+.side-brand img{background:#fff;box-shadow:0 2px 8px rgba(200,16,46,.15)}
+.side-brand b{color:var(--ink)}
+.side-brand span{color:var(--muted)}
+.nav-label{color:var(--side-muted)}
+.nav a{color:var(--side-ink)}
+.nav a svg{opacity:.7}
+.nav a:hover{background:rgba(20,22,28,.04);color:var(--ink)}
+.nav a.on{background:linear-gradient(135deg,var(--primary),#e0334f);color:#fff;box-shadow:0 6px 18px rgba(200,16,46,.28)}
+.nav a.on::before{display:none}
+.nav a.on svg{opacity:1;color:#fff}
+.nav a.on .count{background:#fff;color:var(--primary)}
+.side-foot{border-top:1px solid var(--line)}
+.side-foot .who b{color:var(--ink)}
+.side-foot .who span{color:var(--muted)}
+.side-foot .btn.ghost{color:var(--muted)}
+.side-foot .btn.ghost:hover{background:rgba(20,22,28,.05);color:var(--ink)}
+.avatar{background:linear-gradient(135deg,var(--primary),#e0334f)}
+
+/* top area: glass bar with title */
+.topbar{background:var(--glass);backdrop-filter:var(--blur);-webkit-backdrop-filter:var(--blur);border-bottom:1px solid rgba(231,232,238,.8);min-height:60px}
+.topbar h1{font-size:19px;background:linear-gradient(90deg,var(--ink),#7d0a1c);-webkit-background-clip:text;background-clip:text;color:transparent}
+
+/* cards get a faint glass edge */
+.card,.livebar{background:rgba(255,255,255,.86);backdrop-filter:saturate(1.4) blur(8px);-webkit-backdrop-filter:saturate(1.4) blur(8px);border-color:rgba(231,232,238,.9)}
+.t th{background:rgba(248,248,251,.95)}
+.stat::before{width:4px}
+
+/* buttons: no navy anywhere */
+.btn.dark{background:linear-gradient(135deg,var(--primary),#e0334f);border-color:transparent;color:#fff;box-shadow:0 6px 18px rgba(200,16,46,.25)}
+.btn.dark:hover{background:linear-gradient(135deg,var(--primary-h),var(--primary))}
+.btn.primary{background:linear-gradient(135deg,var(--primary),#e0334f);border-color:transparent}
+.btn.success{background:linear-gradient(135deg,#15803d,#22a052);border-color:transparent;box-shadow:0 6px 16px rgba(22,128,60,.22)}
+.afilter{background:transparent}
+.afilter button.on{background:var(--primary);border-color:var(--primary)}
+.afilter button.on span{color:#ffd3da}
+.tip{background:rgba(20,22,28,.88);backdrop-filter:blur(8px)}
+.toast{background:rgba(20,22,28,.88);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+.toast.err{background:rgba(194,43,43,.92)}
+
+/* login: red classic panel + glass card */
+.login{background:transparent}
+.login-brand{background:linear-gradient(145deg,#7d0a1c 0%,#c8102e 60%,#e0334f 100%)}
+.login-brand::after{background:radial-gradient(circle,rgba(255,215,120,.35),transparent 65%)}
+.login-brand p{color:#ffe3e8}
+.login-facts span{color:#ffc9d2}
+.login-form{background:transparent}
+.login-card{background:var(--glass-strong);backdrop-filter:var(--blur);-webkit-backdrop-filter:var(--blur);border:1px solid var(--glass-line);box-shadow:var(--glass-shadow)}
+
+/* native selects: same look as the custom dropdown */
+select.input{appearance:none;-webkit-appearance:none;padding-right:34px;cursor:pointer;
+  background:rgba(255,255,255,.8) url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2216%22 height=%2216%22 fill=%22none%22 stroke=%22%236b7080%22 stroke-width=%222%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22 viewBox=%220 0 24 24%22%3E%3Cpath d=%22m6 9 6 6 6-6%22/%3E%3C/svg%3E") no-repeat right 10px center}
+
+/* glass dropdown */
+.picker{position:relative;z-index:15}
+.picker.open{z-index:40}
+.pk-btn{width:100%;display:flex;align-items:center;gap:10px;text-align:left;padding:10px 14px;border-radius:16px;border:1px solid var(--glass-line);background:var(--glass-strong);backdrop-filter:var(--blur);-webkit-backdrop-filter:var(--blur);box-shadow:var(--glass-shadow);transition:box-shadow .2s,transform .08s}
+.pk-btn:active{transform:scale(.99)}
+.picker.open .pk-btn{box-shadow:0 0 0 3px var(--primary-soft),var(--glass-shadow);border-color:rgba(200,16,46,.35)}
+.pk-btn>svg{width:20px;height:20px;color:var(--muted);flex:none;transition:transform .25s var(--ease)}
+.picker.open .pk-btn>svg{transform:rotate(180deg);color:var(--primary)}
+.pk-main{flex:1;min-width:0;display:grid}
+.pk-main small{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--primary)}
+.pk-main b{font-size:16px;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pk-main em,.pk-ot em{font-style:normal;font-size:12.5px;color:var(--muted)}
+.pk-pop{position:absolute;left:0;right:0;top:calc(100% + 8px);max-height:min(62vh,520px);overflow:auto;padding:8px;border-radius:18px;border:1px solid var(--glass-line);
+  background:rgba(255,255,255,.82);backdrop-filter:var(--blur);-webkit-backdrop-filter:var(--blur);box-shadow:0 24px 60px rgba(20,22,28,.18);transform-origin:top center;animation:pop .2s var(--ease)}
+.pk-group+.pk-group{margin-top:6px;padding-top:6px;border-top:1px solid var(--line)}
+.pk-gl{display:flex;justify-content:space-between;padding:6px 10px 4px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+.pk-opt{width:100%;display:flex;align-items:center;gap:10px;text-align:left;padding:10px;border:0;border-radius:12px;background:transparent;transition:background .12s}
+.pk-opt:hover{background:rgba(20,22,28,.04)}
+.pk-opt.on{background:var(--primary-soft)}
+.pk-opt.on b{color:var(--primary)}
+.pk-opt>svg{width:18px;height:18px;color:var(--primary);flex:none}
+.pk-ot{flex:1;min-width:0;display:grid}
+.pk-ot b{font-size:14.5px;line-height:1.3;white-space:normal}
+.pk-dot{width:9px;height:9px;border-radius:50%;background:var(--line-2);flex:none}
+.pk-dot.green{background:var(--green);box-shadow:0 0 0 3px var(--green-bg)}
+.pk-dot.blue{background:var(--blue)}
+.venue-pick{display:none}
+
+/* glass bottom bar + bottom sheets */
+@media (max-width:1023px){
+  .venue-seg{display:none}
+  .venue-pick{display:block}
+  .topbar{background:var(--glass)}
+  .tabbar{background:rgba(255,255,255,.66);backdrop-filter:saturate(1.8) blur(22px);-webkit-backdrop-filter:saturate(1.8) blur(22px);border:1px solid rgba(255,255,255,.8);box-shadow:0 12px 36px rgba(20,22,28,.16),inset 0 1px 0 rgba(255,255,255,.9);border-radius:24px;left:12px;right:12px}
+  .tabbar a,.tabbar button{color:#6b7080;border-radius:18px}
+  .tabbar a.on{color:var(--primary);background:rgba(200,16,46,.10)}
+  .tabbar a.on svg{color:var(--primary)}
+  .more{background:rgba(20,22,28,.28);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px)}
+  .more-card,.panel{background:rgba(255,255,255,.86);backdrop-filter:var(--blur);-webkit-backdrop-filter:var(--blur);border-top:1px solid var(--glass-line)}
+  .more-grid a,.more-grid button{background:rgba(255,255,255,.7);border-color:rgba(231,232,238,.9)}
+  .overlay{background:rgba(20,22,28,.28);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px)}
+}
+
+/* ---------- no gaps, no overlaps ---------- */
+.content{gap:14px}
+.sheet-head{align-items:flex-start}
+.sheet-head h2,.lc-t,.aw-n,.ev-item .nm,.entry .nm,.now-ev .t,.li .t{overflow-wrap:anywhere}
+.vrow-h{display:grid;grid-template-columns:auto minmax(0,1fr);column-gap:8px;row-gap:2px;padding-top:2px}
+.vrow-h .sub{grid-column:2;width:auto;padding-left:0}
+.vrow-h .grow{display:none}
+.vrow-b{grid-template-columns:repeat(auto-fill,minmax(min(220px,100%),1fr))}
+.entry .acts{min-width:0}
+.entry .acts .badge{white-space:normal;text-align:left}
+.timer{flex-wrap:wrap;row-gap:4px}
+.lb-item{min-width:0}
+.lb-c{flex-wrap:wrap}
+.hb-row{grid-template-columns:30px minmax(0,240px) minmax(0,1fr) 46px}
+.live-cards{grid-template-columns:repeat(auto-fill,minmax(min(280px,100%),1fr))}
+.dl{grid-template-columns:96px minmax(0,1fr)}
+.dl dd{overflow-wrap:anywhere}
+.toolbar>*{min-width:0}
+.card-h{row-gap:6px}
+@media (max-width:767px){
+  .content{gap:12px;padding-left:12px;padding-right:12px}
+  .stats,.stats.six,.stats.four{gap:10px}
+  .stat{padding:11px 12px}
+  .stat .foot{display:none}
+  .sheet-head{gap:10px}
+  .tabs-in button{padding:12px 8px}
+  .vrow{padding:12px 14px}
+}
+.pk-pop{background:rgba(255,255,255,.94)}
+@media (max-width:1023px){
+  .picker.open::before{content:"";position:fixed;inset:0;background:rgba(20,22,28,.30);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);z-index:58;animation:fade .2s ease}
+  .picker.open .pk-pop{position:fixed;left:10px;right:10px;top:auto;bottom:calc(10px + env(safe-area-inset-bottom,0px));max-height:72vh;z-index:59;border-radius:24px;padding:10px;animation:sheet-up .3s var(--ease);background:rgba(255,255,255,.95)}
+  .picker.open .pk-pop::before{content:"";display:block;width:40px;height:5px;border-radius:99px;background:var(--line-2);margin:2px auto 8px}
+  .pk-opt{padding:12px 10px;min-height:52px}
+}

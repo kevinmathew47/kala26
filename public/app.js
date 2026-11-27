@@ -27,6 +27,8 @@ const ICON = {
   timer: '<circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2M9 2h6"/>',
   arrow: '<path d="M5 12h14M13 6l6 6-6 6"/>',
   chart: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
+  chev: '<path d="m6 9 6 6 6-6"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
   bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.9 1.9 0 0 0 3.4 0"/>'
 };
 const icon = k => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON[k]}</svg>`;
@@ -202,6 +204,18 @@ function trophyCard(ch, compact) {
   </div>`;
 }
 
+/* glass dropdown: groups = [[label, [{v, t, sub, tone}]]] */
+function picker(id, label, cur, groups) {
+  const open = ui.pk === id, all = groups.flatMap(g => g[1]), c = all.find(o => o.v === cur) || all[0] || {};
+  return `<div class="picker ${open ? "open" : ""}" data-pk="${id}">
+    <button class="pk-btn" data-act="pk-toggle" data-pk="${id}" aria-haspopup="listbox" aria-expanded="${open}">
+      <span class="pk-main"><small>${esc(label)}</small><b>${esc(c.t || "")}</b>${c.sub ? `<em>${c.sub}</em>` : ""}</span>${icon("chev")}</button>
+    ${open ? `<div class="pk-pop" role="listbox">${groups.filter(g => g[1].length).map(([gl, opts]) => `<div class="pk-group">${gl ? `<div class="pk-gl">${esc(gl)}<span>${opts.length}</span></div>` : ""}
+      ${opts.map(o => `<button class="pk-opt ${o.v === cur ? "on" : ""}" role="option" aria-selected="${o.v === cur}" data-act="pk-pick" data-pk="${id}" data-v="${esc(o.v)}">
+        <span class="pk-dot ${o.tone || ""}"></span><span class="pk-ot"><b>${esc(o.t)}</b>${o.sub ? `<em>${o.sub}</em>` : ""}</span>${o.v === cur ? icon("check") : ""}</button>`).join("")}</div>`).join("")}</div>` : ""}
+  </div>`;
+}
+
 /* ================= actions ================= */
 async function act(path, body, optimistic, okMsg) {
   const snap = JSON.stringify({ att: S.att, est: S.est, tmr: S.tmr });
@@ -344,7 +358,8 @@ function renderMore() {
 function view(r) {
   switch (r) {
     case "dashboard": return vDashboard();
-    case "venues": return `<div class="toolbar single"><div class="seg" role="tablist">${S.venues.map(v => `<button class="${ui.venue === v.code ? "on" : ""}" data-act="venue" data-v="${v.code}">${v.code} · ${esc(v.name)}</button>`).join("")}</div></div>${vDesk(ui.venue)}`;
+    case "venues": return `<div class="toolbar single venue-seg"><div class="seg" role="tablist">${S.venues.map(v => `<button class="${ui.venue === v.code ? "on" : ""}" data-act="venue" data-v="${v.code}">${v.code} · ${esc(v.name)}</button>`).join("")}</div></div>
+      <div class="venue-pick">${picker("venue", "Venue", ui.venue, [["", S.venues.map(v => { const l = IDX.evs.filter(e => e.venue === v.code); return { v: v.code, t: `${v.code} · ${v.name}`, tone: l.some(e => stateOf(e.id) === "live") ? "green" : "", sub: `${l.filter(e => stateOf(e.id) === "live").length} open · ${l.filter(e => stateOf(e.id) === "done").length}/${l.length} finished` }; })]])}</div>${vDesk(ui.venue)}`;
     case "participants": return vParticipants();
     case "results": return vResults();
     case "events": return vEvents();
@@ -458,7 +473,9 @@ function vDesk(venue) {
       <span class="mt">${stateOf(e.id) === "upcoming" ? `${e.entries.length} ${e.type === "group" ? "teams" : "participants"}` : `${here}/${e.entries.length} arrived`}${c.running ? ` · <b class="amber-t">${c.running} timing</b>` : ""}</span></button>`; };
   const groups = [["live", "Open now"], ["upcoming", "Not started"], ["done", "Finished"]].map(([st, label]) => {
     const list = evs.filter(e => stateOf(e.id) === st); return list.length ? `<div class="ev-group"><div class="ev-gh">${label}<span>${list.length}</span></div>${list.map(item).join("")}</div>` : ""; }).join("");
-  const select = `<div class="ev-select"><label class="sr" for="evsel">Event</label><select class="input" id="evsel" data-act="sel-select">${[["live", "Open now"], ["upcoming", "Not started"], ["done", "Finished"]].map(([st, label]) => { const l = evs.filter(e => stateOf(e.id) === st); return l.length ? `<optgroup label="${label}">${l.map(e => `<option value="${e.id}" ${e.id === sel.id ? "selected" : ""}>${esc(short(e.title))}</option>`).join("")}</optgroup>` : ""; }).join("")}</select></div>`;
+  const opt = e => { const c = counts(e), st = stateOf(e.id);
+    return { v: e.id, t: short(e.title), tone: st === "live" ? "green" : st === "done" ? "blue" : "", sub: st === "upcoming" ? `${e.entries.length} ${e.type === "group" ? "teams" : "participants"}` : `${c.present + c.running + c.done}/${e.entries.length} arrived${c.running ? ` · ${c.running} timing` : ""}` }; };
+  const select = `<div class="ev-select">${picker("ev", "Event", sel.id, [["Open now", evs.filter(e => stateOf(e.id) === "live").map(opt)], ["Not started", evs.filter(e => stateOf(e.id) === "upcoming").map(opt)], ["Finished", evs.filter(e => stateOf(e.id) === "done").map(opt)]])}</div>`;
   return `${liveStrip()}${select}<div class="desk"><div class="ev-list">${groups}</div><div style="min-width:0;display:grid;gap:16px">${callSheet(sel)}</div></div>`;
 }
 function callSheet(ev) {
@@ -730,6 +747,7 @@ function renderSheet() {
 
 /* ================= events ================= */
 document.addEventListener("click", e => {
+  if (ui.pk && !e.target.closest(".picker")) { ui.pk = null; render(true); }
   const t = e.target.closest("[data-act]"); if (!t) return;
   const a = t.dataset.act;
   if (a === "sheet-close") { if (t.classList.contains("overlay") && e.target !== t) return; ui.person = null; renderSheet(); return; }
@@ -739,6 +757,10 @@ document.addEventListener("click", e => {
     case "logout": api("/api/logout", {}).finally(() => { ME = null; SET = null; location.hash = ""; renderLogin(); }); break;
     case "nav-open": ui.navOpen = true; render(true); break;
     case "more-open": ui.moreOpen = true; renderMore(); break;
+    case "pk-toggle": ui.pk = ui.pk === t.dataset.pk ? null : t.dataset.pk; render(true); break;
+    case "pk-pick": { const id = t.dataset.pk, v = t.dataset.v; ui.pk = null;
+      if (id === "ev") { ui.sel = v; ui.confirm = null; } else if (id === "venue") { ui.venue = v; ui.sel = null; }
+      render(true); break; }
     case "more-close": if (e.target !== t) return; ui.moreOpen = false; renderMore(); break;
     case "nav-close": ui.navOpen = false; render(true); break;
     case "venue": ui.venue = t.dataset.v; ui.sel = null; render(true); break;
@@ -780,7 +802,7 @@ function tellNext(eid, k) {
 document.addEventListener("mouseover", e => { const r = e.target.closest("[data-tip]"); const tip = $("#tip"); if (!tip) return;
   if (!r || !r.dataset.tip) { tip.hidden = true; return; } tip.textContent = r.dataset.tip; tip.hidden = false;
   const b = r.getBoundingClientRect(); tip.style.left = Math.min(window.innerWidth - tip.offsetWidth - 8, b.left + 24) + "px"; tip.style.top = (b.top - tip.offsetHeight - 6) + "px"; });
-document.addEventListener("keydown", e => { if (e.key === "Escape") { if (ui.moreOpen) { ui.moreOpen = false; renderMore(); return; } if (ui.person) { ui.person = null; renderSheet(); } else if (ui.navOpen) { ui.navOpen = false; render(true); } } });
+document.addEventListener("keydown", e => { if (e.key === "Escape") { if (ui.pk) { ui.pk = null; render(true); return; } if (ui.moreOpen) { ui.moreOpen = false; renderMore(); return; } if (ui.person) { ui.person = null; renderSheet(); } else if (ui.navOpen) { ui.navOpen = false; render(true); } } });
 document.addEventListener("input", e => {
   const t = e.target;
   if (t.id === "q") { ui.q = t.value; const el = $("#ptable"); if (el) el.innerHTML = pTable(); }
