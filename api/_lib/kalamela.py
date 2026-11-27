@@ -1,4 +1,4 @@
-"""Kalamela 2026 attendance tracker - shared backend.
+"""Kalamela 2026 attendance & results - shared backend.
 
 Used by two entry points:
   * api/index.py  - Vercel serverless function (Postgres via DATABASE_URL)
@@ -17,17 +17,19 @@ from urllib.parse import parse_qs, unquote, urlparse
 LIB = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(LIB))
 PUBLIC = os.path.join(ROOT, "public")
+
+
 def _find_pg_url():
     """Neon/Vercel name the variable differently depending on how it was connected."""
     for name in ("DATABASE_URL", "POSTGRES_URL", "NEON_DATABASE_URL", "POSTGRES_PRISMA_URL", "DATABASE_URL_UNPOOLED", "POSTGRES_URL_NON_POOLING"):
         v = os.environ.get(name, "").strip()
         if v.startswith(("postgres://", "postgresql://")):
             return name, v
-    for name, v in sorted(os.environ.items()):  # e.g. STORAGE_DATABASE_URL from a custom prefix
+    for name, v in sorted(os.environ.items()):
         v = v.strip()
         if (name.endswith("DATABASE_URL") or name.endswith("POSTGRES_URL")) and v.startswith(("postgres://", "postgresql://")):
             return name, v
-    for name, v in sorted(os.environ.items()):  # last resort: any postgres link, preferring pooled ones
+    for name, v in sorted(os.environ.items()):
         v = v.strip()
         if v.startswith(("postgres://", "postgresql://")) and "UNPOOLED" not in name and "NON_POOLING" not in name:
             return name, v
@@ -37,32 +39,42 @@ def _find_pg_url():
 PG_ENV, PG_URL = _find_pg_url()
 ON_VERCEL = bool(os.environ.get("VERCEL"))
 SQLITE_PATH = os.environ.get("KALAMELA_DB", os.path.join(ROOT, "kalamela.db"))
-IST = timezone(timedelta(hours=5, minutes=30))  # event times are India time
+IST = timezone(timedelta(hours=5, minutes=30))
 
-VENUE_DEFAULT_CODES = {"V1": "CHURCH1", "V2": "BALCONY2", "V3": "VESTRY3", "V4": "FHALL4", "V5": "GROUND5"}
+VENUE_DEFAULT_CODES = {"V1": "CHURCH1", "V2": "BALCONY2", "V3": "VESTRY3", "V4": "FHALL4", "V5": "ART5"}
 STATUSES = {"present", "done", "absent"}
 EVENT_STATES = {"upcoming", "live", "done"}
 SESSION_HOURS = 48
+DEFAULT_POINTS = {"ind": [5, 3, 1], "grp": [10, 6, 2]}
 
 # ------------------------------------------------------------------ seed data
 with open(os.path.join(LIB, "data.json"), encoding="utf-8") as f:
     SEED = json.load(f)
-for _e in SEED["events"]:
-    _e["venue"] = _e["venue"].replace("Venue ", "V")
 VENUES = [{"code": v["code"], "name": v["name"]} for v in SEED["venues"]]
-VENUE_NAME = {v["code"]: v["name"] for v in VENUES}
 PEOPLE = {p["chest"]: p for p in SEED["people"]}
 EVENTS = {e["id"]: e for e in SEED["events"]}
-BOOT_JSON = json.dumps({"venues": VENUES, "people": SEED["people"], "events": SEED["events"]}, ensure_ascii=False).encode("utf-8")
+BOOT_JSON = json.dumps({"people": SEED["people"], "events": SEED["events"]}, ensure_ascii=False).encode("utf-8")
 
 
 def now_iso():
     return datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
 
 
+def now_ms():
+    return int(time.time() * 1000)
+
+
 def env_admin_code():
     c = os.environ.get("KALAMELA_ADMIN_CODE", "").strip().upper()
     return c if len(c) >= 4 else ""
+
+
+def key_of(en):
+    return en.get("chest") or en.get("team")
+
+
+def members(en):
+    return en.get("members") or [en["chest"]]
 
 
 # ------------------------------------------------------------------ database
@@ -71,7 +83,6 @@ class SetupError(Exception):
 
 
 def explain(err):
-    """A readable reason for a database failure, with anything secret removed."""
     import re
     if isinstance(err, SetupError):
         return str(err)
@@ -182,11 +193,17 @@ class Tx:
             "CREATE TABLE IF NOT EXISTS kl_attendance(eid TEXT, k TEXT, status TEXT, ts TEXT, actor TEXT, PRIMARY KEY(eid, k))",
             f"CREATE TABLE IF NOT EXISTS kl_activity(id {serial}, ts TEXT, actor TEXT, action TEXT, eid TEXT, k TEXT, detail TEXT)",
             "CREATE TABLE IF NOT EXISTS kl_venue(code TEXT PRIMARY KEY, name TEXT, pos INTEGER)",
+            "CREATE TABLE IF NOT EXISTS kl_timer(eid TEXT, k TEXT, started BIGINT, ended BIGINT, PRIMARY KEY(eid, k))",
+            "CREATE TABLE IF NOT EXISTS kl_event_cfg(id TEXT PRIMARY KEY, timer REAL, timer_min REAL, judges INTEGER)",
+            "CREATE TABLE IF NOT EXISTS kl_sheet(eid TEXT PRIMARY KEY, data TEXT, ts TEXT, actor TEXT)",
         ):
             self.run(s)
-        for i, v in enumerate(VENUES):  # the confirmed venues; the admin can add more
+        for i, v in enumerate(VENUES):
             self.run("INSERT INTO kl_venue(code,name,pos) VALUES(?,?,?) ON CONFLICT(code) DO NOTHING", (v["code"], v["name"], i + 1))
-        defaults = {"version": "1", "codes_version": "1", "secret": secrets.token_hex(32)}
+        # earlier default names -> confirmed names (only if the admin hasn't renamed them)
+        self.run("UPDATE kl_venue SET name=? WHERE code='V4' AND name='Fellowship Hall'", ("Fellowship Hall – Group Events",))
+        self.run("UPDATE kl_venue SET name=? WHERE code='V5' AND name='Ground Floor'", ("Fellowship Hall – Art",))
+        defaults = {"version": "1", "codes_version": "1", "secret": secrets.token_hex(32), "points": json.dumps(DEFAULT_POINTS)}
         for k, v in VENUE_DEFAULT_CODES.items():
             defaults["code_" + k] = v
         if env_admin_code():
@@ -196,6 +213,15 @@ class Tx:
             defaults["code_admin"] = "ADM-" + "".join(secrets.choice(alphabet) for _ in range(6))
         for k, v in defaults.items():
             self.run("INSERT INTO kl_config(name,val) VALUES(?,?) ON CONFLICT(name) DO NOTHING", (k, v))
+        # the old timed schedule used different event ids; drop its leftovers once
+        if not self.one("SELECT val FROM kl_config WHERE name='schema'"):
+            known = tuple(EVENTS)
+            for tbl, col in (("kl_attendance", "eid"), ("kl_event_state", "id"), ("kl_event_override", "id")):
+                for r in self.all(f"SELECT DISTINCT {col} AS x FROM {tbl}"):
+                    if r["x"] not in known:
+                        self.run(f"DELETE FROM {tbl} WHERE {col}=?", (r["x"],))
+            self.run("INSERT INTO kl_config(name,val) VALUES('schema','2') ON CONFLICT(name) DO NOTHING")
+            self.bump()
 
     # helpers
     def config(self):
@@ -210,26 +236,50 @@ class Tx:
     def log(self, actor, action, eid="", k="", detail=""):
         self.run("INSERT INTO kl_activity(ts,actor,action,eid,k,detail) VALUES(?,?,?,?,?,?)", (now_iso(), actor, action, eid, k, detail))
 
+    def venues(self):
+        return [{"code": r["code"], "name": r["name"]} for r in self.all("SELECT code,name,pos FROM kl_venue ORDER BY pos, code")]
+
     def overrides(self):
+        return {r["id"]: {"venue": r["venue"]} for r in self.all("SELECT id,venue FROM kl_event_override") if r["venue"]}
+
+    def event_cfg(self):
         out = {}
-        for r in self.all("SELECT id,venue,start_m,end_m FROM kl_event_override"):
+        for r in self.all("SELECT * FROM kl_event_cfg"):
             o = {}
-            if r["venue"] is not None: o["venue"] = r["venue"]
-            if r["start_m"] is not None: o["start"] = int(r["start_m"])
-            if r["end_m"] is not None: o["end"] = int(r["end_m"])
+            if r["timer"] is not None: o["timer"] = float(r["timer"])
+            if r["timer_min"] is not None: o["timerMin"] = float(r["timer_min"])
+            if r["judges"] is not None: o["judges"] = int(r["judges"])
             out[r["id"]] = o
         return out
 
-    def venues(self):
-        return [{"code": r["code"], "name": r["name"]} for r in self.all("SELECT code,name,pos FROM kl_venue ORDER BY pos, code")]
+    def sheets(self):
+        out = {}
+        for r in self.all("SELECT eid,data FROM kl_sheet"):
+            try:
+                out[r["eid"]] = json.loads(r["data"] or "{}")
+            except Exception:
+                out[r["eid"]] = {}
+        return out
+
+    def points(self, cfg=None):
+        try:
+            p = json.loads((cfg or self.config()).get("points") or "{}")
+            return {"ind": [float(x) for x in p.get("ind", DEFAULT_POINTS["ind"])][:3], "grp": [float(x) for x in p.get("grp", DEFAULT_POINTS["grp"])][:3]}
+        except Exception:
+            return DEFAULT_POINTS
 
     def snapshot(self, version):
         return {
             "version": version,
             "venues": self.venues(),
             "evo": self.overrides(),
+            "cfg": self.event_cfg(),
             "est": {r["id"]: {"s": r["state"], "at": r["ts"], "by": r["actor"]} for r in self.all("SELECT * FROM kl_event_state")},
             "att": {r["eid"] + "--" + r["k"]: {"s": r["status"], "at": r["ts"], "by": r["actor"]} for r in self.all("SELECT * FROM kl_attendance")},
+            "tmr": {r["eid"] + "--" + r["k"]: {"s": int(r["started"]) if r["started"] is not None else None,
+                                               "e": int(r["ended"]) if r["ended"] is not None else None} for r in self.all("SELECT * FROM kl_timer")},
+            "sheets": self.sheets(),
+            "points": self.points(),
         }
 
 
@@ -243,47 +293,60 @@ def codes_of(cfg):
     return c
 
 
-def merged_events(evo):
+def merged_events(evo, cfg=None):
+    cfg = cfg or {}
     out = []
     for e in SEED["events"]:
-        o = evo.get(e["id"], {})
-        start, end = o.get("start", e["start"]), o.get("end", e["end"])
-        d = start - e["start"]
-        out.append({**e, "venue": o.get("venue", e["venue"]), "start": start, "end": end,
-                    "entries": [{**x, "time": x["time"] + d} for x in e["entries"]]})
-    out.sort(key=lambda e: (e["start"], e["venue"]))
+        o, c = evo.get(e["id"], {}), cfg.get(e["id"], {})
+        out.append({**e, "venue": o.get("venue", e["venue"]), "timer": c.get("timer", e["timer"]),
+                    "timerMin": c.get("timerMin", e["timerMin"]), "judges": c.get("judges", e["judges"])})
     return out
 
 
-def check_session(t, cfg, token):
-    """Signed cookie plus: a venue volunteer is signed out if their venue was removed."""
-    s = read_session(cfg, token)
-    if s and s["role"] == "venue" and s["venue"] not in {v["code"] for v in t.venues()}:
-        return None
-    return s
+# ------------------------------------------------------------------ results
+def event_results(ev, sheet, judges, status_of):
+    """Rows sorted by total; rank shared on ties (1,1,3). Only entries with marks are ranked."""
+    rows = []
+    for en in ev["entries"]:
+        k = key_of(en)
+        if status_of(k) == "absent":
+            continue
+        marks = (sheet or {}).get(k) or []
+        totals = []
+        for j in range(judges):
+            vals = marks[j] if j < len(marks) and isinstance(marks[j], list) else []
+            nums = [float(v) for v in vals if isinstance(v, (int, float))]
+            totals.append(sum(nums) if nums else None)
+        if all(x is None for x in totals):
+            continue
+        rows.append({"k": k, "judgeTotals": totals, "total": sum(x for x in totals if x is not None)})
+    rows.sort(key=lambda r: -r["total"])
+    for i, r in enumerate(rows):
+        r["rank"] = rows[i - 1]["rank"] if i and r["total"] == rows[i - 1]["total"] else i + 1
+    return rows
 
 
-def next_venue_code(venues):
-    nums = [int(v["code"][1:]) for v in venues if v["code"][1:].isdigit()]
-    return "V" + str(max(nums + [0]) + 1)
-
-
-def validate_codes(passes, names):
-    if any(not n for n in names.values()):
-        return "Every venue needs a name."
-    if any(len(v) < 4 for v in passes.values()):
-        return "Each code needs at least 4 characters."
-    if any(not all(ch.isalnum() or ch in "-_" for ch in v) for v in passes.values()):
-        return "Codes can use only letters, numbers, - and _."
-    if len(set(passes.values())) != len(passes):
-        return "Every code must be different."
-    if len({n.lower() for n in names.values()}) != len(names):
-        return "Two venues have the same name."
-    return ""
-
-
-def actor(sess):
-    return "Admin" if sess["role"] == "admin" else sess["venue"]
+def championship(evs, sheets, status_fn, points, venue_name):
+    ind, church = {}, {}
+    per_event = []
+    for ev in evs:
+        res = event_results(ev, sheets.get(ev["id"]), ev["judges"], lambda k, ev=ev: status_fn(ev, k))
+        pts = points["grp"] if ev["type"] == "group" else points["ind"]
+        winners = []
+        for r in res:
+            if r["rank"] > 3:
+                continue
+            p = pts[r["rank"] - 1] if r["rank"] - 1 < len(pts) else 0
+            en = next(x for x in ev["entries"] if key_of(x) == r["k"])
+            parish = en.get("parish") or PEOPLE.get(r["k"], {}).get("parish", "")
+            church[parish] = church.get(parish, 0) + p
+            if ev["type"] != "group":
+                d = ind.setdefault(r["k"], {"points": 0, "first": 0, "second": 0, "third": 0})
+                d["points"] += p
+                d[["first", "second", "third"][r["rank"] - 1]] += 1
+            winners.append((r["rank"], r["k"], r["total"], p))
+        per_event.append((ev, winners, len(res)))
+    return per_event, ind, church
 
 
 # ------------------------------------------------------------------ sessions
@@ -315,22 +378,53 @@ def read_session(cfg, token):
         return None
 
 
+def check_session(t, cfg, token):
+    s = read_session(cfg, token)
+    if s and s["role"] == "venue" and s["venue"] not in {v["code"] for v in t.venues()}:
+        return None
+    return s
+
+
+def next_venue_code(venues):
+    nums = [int(v["code"][1:]) for v in venues if v["code"][1:].isdigit()]
+    return "V" + str(max(nums + [0]) + 1)
+
+
+def validate_codes(passes, names):
+    if any(not n for n in names.values()):
+        return "Every venue needs a name."
+    if any(len(v) < 4 for v in passes.values()):
+        return "Each code needs at least 4 characters."
+    if any(not all(ch.isalnum() or ch in "-_" for ch in v) for v in passes.values()):
+        return "Codes can use only letters, numbers, - and _."
+    if len(set(passes.values())) != len(passes):
+        return "Every code must be different."
+    if len({n.lower() for n in names.values()}) != len(names):
+        return "Two venues have the same name."
+    return ""
+
+
+def actor(sess):
+    return "Admin" if sess["role"] == "admin" else sess["venue"]
+
+
 # ------------------------------------------------------------------ excel
-def fmt_min(m):
-    h, mm = divmod(int(m), 60)
-    ap = "PM" if h >= 12 else "AM"
-    return f"{h % 12 or 12}:{mm:02d} {ap}"
+def fmt_dur(ms):
+    if ms is None:
+        return ""
+    s = int(ms // 1000)
+    return f"{s // 60}:{s % 60:02d}"
 
 
-def build_workbook(snap, acts, VENUE_NAME):
+def build_workbook(snap, acts, venue_name):
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
     from openpyxl.utils import get_column_letter
 
-    evs = merged_events(snap["evo"])
-    est, att = snap["est"], snap["att"]
-    label = {"present": "Present", "done": "Performed", "absent": "Absent", "waiting": "Not marked"}
-    st_label = {"upcoming": "Upcoming", "live": "Live", "done": "Closed"}
+    evs = merged_events(snap["evo"], snap["cfg"])
+    est, att, tmr = snap["est"], snap["att"], snap["tmr"]
+    label = {"present": "Present", "done": "Completed", "absent": "Absent", "waiting": "Not marked"}
+    st_label = {"upcoming": "Not started", "live": "In progress", "done": "Finished"}
 
     def status(ev, k):
         a = att.get(ev["id"] + "--" + k, {}).get("s")
@@ -341,50 +435,56 @@ def build_workbook(snap, acts, VENUE_NAME):
     wb = Workbook()
     red = "C8102E"
     thin = Side(style="thin", color="D9DDE3")
-    fills = {"Performed": "DCEBFF", "Present": "DDF3E4", "Absent": "FBE0E3", "Not marked": "F2F3F5"}
+    fills = {"Completed": "DCEBFF", "Present": "DDF3E4", "Absent": "FBE0E3", "Not marked": "F2F3F5"}
 
     def sheet(ws, headers, rows, widths, status_col=None):
         ws.append(headers)
         for c in ws[1]:
             c.font, c.fill = Font(bold=True, color="FFFFFF"), PatternFill("solid", fgColor=red)
-            c.alignment = Alignment(vertical="center")
+            c.alignment = Alignment(vertical="center", wrap_text=True)
         for r in rows:
             ws.append(r)
         for i, w in enumerate(widths, 1):
             ws.column_dimensions[get_column_letter(i)].width = w
         ws.freeze_panes = "A2"
-        ws.auto_filter.ref = ws.dimensions
+        if rows:
+            ws.auto_filter.ref = ws.dimensions
         for row in ws.iter_rows(min_row=2):
             for c in row:
                 c.border = Border(bottom=thin)
             if status_col is not None and row[status_col].value in fills:
                 row[status_col].fill = PatternFill("solid", fgColor=fills[row[status_col].value])
 
+    vn = lambda c: f"{c} - {venue_name.get(c, '')}"
     per_person, att_rows = {}, []
     for ev in evs:
         st = est.get(ev["id"], {}).get("s", "upcoming")
         for en in ev["entries"]:
-            k = en.get("chest") or en.get("team")
+            k = key_of(en)
             s = status(ev, k)
             a = att.get(ev["id"] + "--" + k, {})
-            for c in (en.get("members") or [en["chest"]]):
+            tm = tmr.get(ev["id"] + "--" + k, {})
+            took = (tm["e"] - tm["s"]) if tm.get("s") and tm.get("e") else None
+            over = "Yes" if took and ev["timer"] and took > ev["timer"] * 60000 else ""
+            for c in members(en):
                 p = PEOPLE.get(c, {})
                 per_person.setdefault(c, []).append(s)
-                att_rows.append([ev["title"], {"G1": "Group 1", "G2": "Group 2"}.get(en.get("cat"), ""),
-                                 f'{ev["venue"]} - {VENUE_NAME.get(ev["venue"], "")}', fmt_min(en["time"]), en.get("team", ""), c,
-                                 p.get("name", ""), p.get("parish", ""), p.get("phone", ""), label[s], st_label[st], a.get("by", ""), a.get("at", "")])
+                att_rows.append([ev["title"], vn(ev["venue"]), en.get("team", ""), c, p.get("name", ""), p.get("gender", ""), p.get("parish", ""),
+                                 p.get("phone", ""), label[s], fmt_dur(took), over, st_label[st], a.get("by", ""), a.get("at", "")])
+
+    per_event, ind, church = championship(evs, snap["sheets"], status, snap["points"], venue_name)
 
     ws = wb.active
     ws.title = "Summary"
-    ws["A1"] = "Ernakulam Yuvajana Sakhyam Kalamela 2026 - Attendance Report"
+    ws["A1"] = "Ernakulam Yuvajana Sakhyam Kalamela 2026 - Attendance & Results"
     ws["A1"].font = Font(bold=True, size=14, color=red)
     ws["A2"] = "Exported " + now_iso() + " (IST)"
-    cnt = lambda s: sum(1 for r in att_rows if r[9] == s)
+    cnt = lambda s: sum(1 for r in att_rows if r[8] == s)
     summary = [("Participants", len(PEOPLE)),
                ("Participants reported at least once", sum(1 for v in per_person.values() if any(s in ("present", "done") for s in v))),
-               ("Events", len(evs)), ("Events closed", sum(1 for e in evs if est.get(e["id"], {}).get("s") == "done")),
-               ("Events live now", sum(1 for e in evs if est.get(e["id"], {}).get("s") == "live")),
-               ("Participant entries", len(att_rows)), ("Performed", cnt("Performed")), ("Present (not yet performed)", cnt("Present")),
+               ("Events", len(evs)), ("Events finished", sum(1 for e in evs if est.get(e["id"], {}).get("s") == "done")),
+               ("Events in progress", sum(1 for e in evs if est.get(e["id"], {}).get("s") == "live")),
+               ("Participant entries", len(att_rows)), ("Completed", cnt("Completed")), ("Present", cnt("Present")),
                ("Absent", cnt("Absent")), ("Not marked yet", cnt("Not marked"))]
     for i, (k, v) in enumerate(summary, start=4):
         ws.cell(row=i, column=1, value=k).font = Font(bold=True)
@@ -392,23 +492,57 @@ def build_workbook(snap, acts, VENUE_NAME):
     ws.column_dimensions["A"].width, ws.column_dimensions["B"].width = 38, 14
 
     sheet(wb.create_sheet("Attendance"),
-          ["Event", "Category", "Venue", "Call time", "Team", "Chest No", "Participant", "Parish", "Contact (parish secretary)",
-           "Status", "Event status", "Marked by", "Marked at"], att_rows, [34, 10, 30, 10, 9, 10, 26, 38, 16, 12, 12, 10, 19], status_col=9)
-    sheet(wb.create_sheet("Participants"),
-          ["Chest No", "Participant", "Gender", "Parish", "Parish secretary", "Contact", "Entries", "Performed", "Present", "Absent", "Not marked"],
-          [[c, p["name"], p.get("gender", ""), p["parish"], p.get("secretary", ""), p.get("phone", ""), len(v := per_person.get(c, [])),
-            v.count("done"), v.count("present"), v.count("absent"), v.count("waiting")] for c, p in sorted(PEOPLE.items())],
-          [10, 26, 9, 38, 22, 14, 9, 11, 9, 9, 11])
+          ["Event", "Venue", "Team", "Chest No", "Participant", "Gender", "Parish", "Contact (parish secretary)", "Status", "Time taken",
+           "Over time", "Event status", "Marked by", "Marked at"], att_rows, [36, 30, 9, 10, 26, 9, 38, 16, 12, 10, 10, 13, 10, 19], status_col=8)
+
+    rrows = []
+    for ev, winners, n in per_event:
+        for rank, k, total, pts in winners:
+            en = next(x for x in ev["entries"] if key_of(x) == k)
+            name = PEOPLE.get(k, {}).get("name", "") if not en.get("team") else "Team " + k
+            rrows.append([ev["title"], rank, k, name, en.get("parish") or PEOPLE.get(k, {}).get("parish", ""), total, pts])
+    sheet(wb.create_sheet("Results"), ["Event", "Rank", "Chest / Team", "Name", "Parish", "Total marks", "Points"], rrows, [40, 7, 12, 28, 40, 12, 8])
+
+    def ranked(items):
+        items = sorted(items, key=lambda x: -x[1])
+        out = []
+        for i, (k, v) in enumerate(items):
+            out.append((out[-1][0] if i and v == items[i - 1][1] else i + 1, k, v))
+        return out
+
+    chrows = []
+    for g in ("Male", "Female"):
+        for rank, k, v in ranked([(k, d["points"]) for k, d in ind.items() if PEOPLE.get(k, {}).get("gender") == g])[:10]:
+            d = ind[k]
+            chrows.append([f"Individual – {g}", rank, k, PEOPLE[k]["name"], PEOPLE[k]["parish"], v, d["first"], d["second"], d["third"]])
+    for rank, k, v in ranked(list(church.items())):
+        chrows.append(["Church", rank, "", "", k, v, "", "", ""])
+    sheet(wb.create_sheet("Championship"), ["Category", "Rank", "Chest No", "Name", "Parish", "Points", "1st places", "2nd places", "3rd places"],
+          chrows, [20, 7, 10, 28, 42, 9, 10, 10, 10])
+
     erow = []
     for ev in evs:
-        ss = [status(ev, en.get("chest") or en.get("team")) for en in ev["entries"]]
-        erow.append([ev["title"], f'{ev["venue"]} - {VENUE_NAME.get(ev["venue"], "")}', fmt_min(ev["start"]), fmt_min(ev["end"]),
-                     st_label[est.get(ev["id"], {}).get("s", "upcoming")], len(ss), ss.count("done"), ss.count("present"), ss.count("absent"), ss.count("waiting")])
-    sheet(wb.create_sheet("Events"), ["Event", "Venue", "Start", "End", "Status", "Entries", "Performed", "Present", "Absent", "Not marked"],
-          erow, [40, 30, 10, 10, 11, 9, 11, 9, 9, 11])
+        ss = [status(ev, key_of(en)) for en in ev["entries"]]
+        erow.append([ev["title"], vn(ev["venue"]), st_label[est.get(ev["id"], {}).get("s", "upcoming")], len(ss), ss.count("done"),
+                     ss.count("present"), ss.count("absent"), ss.count("waiting"), ev["judges"], f'{ev["timer"]:g} min' if ev["timer"] else ""])
+    sheet(wb.create_sheet("Events"), ["Event", "Venue", "Status", "Entries", "Completed", "Present", "Absent", "Not marked", "Judges", "Timer"],
+          erow, [40, 30, 13, 9, 11, 9, 9, 11, 8, 9])
+
+    mrows = []
+    for ev in evs:
+        sh = snap["sheets"].get(ev["id"]) or {}
+        for en in ev["entries"]:
+            marks = sh.get(key_of(en)) or []
+            for j, vals in enumerate(marks[:ev["judges"]]):
+                if isinstance(vals, list) and any(isinstance(v, (int, float)) for v in vals):
+                    nums = [v if isinstance(v, (int, float)) else None for v in vals]
+                    mrows.append([ev["title"], key_of(en), f"Judge {j + 1}"] + nums + [sum(v for v in nums if v is not None)])
+    width = max([len(e["criteria"]) for e in evs] + [1])
+    sheet(wb.create_sheet("Marks"), ["Event", "Chest / Team", "Judge"] + [f"Criterion {i + 1}" for i in range(width)] + ["Total"], mrows,
+          [36, 12, 9] + [11] * width + [9])
     sheet(wb.create_sheet("Activity log"), ["Time (IST)", "By", "Action", "Event", "Chest / Team", "Detail"],
           [[a["ts"], a["actor"], a["action"], EVENTS.get(a["eid"], {}).get("title", a["eid"]), a["k"], a["detail"]] for a in acts],
-          [19, 10, 16, 40, 12, 20])
+          [19, 10, 18, 40, 12, 20])
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
@@ -420,13 +554,12 @@ MIME = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8", 
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "Kalamela/2.0"
-    serve_static = False  # local server turns this on; Vercel serves /public itself
+    server_version = "Kalamela/3.0"
+    serve_static = False
 
     def log_message(self, fmt, *args):
         pass
 
-    # ---- helpers
     def token(self):
         c = SimpleCookie(self.headers.get("Cookie", ""))
         return c["kl_session"].value if "kl_session" in c else ""
@@ -452,7 +585,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def body(self):
         n = int(self.headers.get("Content-Length") or 0)
-        if n <= 0 or n > 100_000:
+        if n <= 0 or n > 400_000:
             return {}
         try:
             return json.loads(self.rfile.read(n))
@@ -462,21 +595,20 @@ class Handler(BaseHTTPRequestHandler):
     def route(self):
         u = urlparse(self.path)
         p = u.path.rstrip("/") or "/"
-        if p == "/api/index":  # Vercel may pass the rewritten path; original is in the query
+        if p == "/api/index":
             p = "/api/" + (parse_qs(u.query).get("path") or [""])[0]
         return p, parse_qs(u.query)
 
     def fail(self, err):
         import sys, traceback
-        traceback.print_exc(file=sys.stderr)  # shows in Vercel → Logs
+        traceback.print_exc(file=sys.stderr)
         self.json({"error": "Database problem: " + explain(err)}, 503)
 
     def health(self):
         info = {"database": "postgres" if PG_URL else "sqlite", "database_env": PG_ENV or None, "on_vercel": ON_VERCEL,
                 "admin_code_env_set": bool(env_admin_code())}
         if PG_URL:
-            u = urlparse(PG_URL)
-            info["database_host"] = u.hostname
+            info["database_host"] = urlparse(PG_URL).hostname
         try:
             t0 = time.time()
             with STORE.tx() as t:
@@ -501,7 +633,7 @@ class Handler(BaseHTTPRequestHandler):
                 cfg = t.config()
                 s = check_session(t, cfg, self.token())
                 if p == "/api/me":
-                    return self.json({"user": s, "setup": bool(codes_of(cfg)["admin"] or env_admin_code())})
+                    return self.json({"user": s})
                 if not s:
                     return self.json({"error": "Please sign in again."}, 401)
                 if p == "/api/bootstrap":
@@ -509,10 +641,10 @@ class Handler(BaseHTTPRequestHandler):
                 if p == "/api/state":
                     v = int(cfg.get("version", "1"))
                     if int((q.get("v") or ["0"])[0] or 0) == v:
-                        return self.json({"version": v, "changed": False})
+                        return self.json({"version": v, "changed": False, "now": now_ms()})
                     if _SNAP["v"] != v:
                         _SNAP["v"], _SNAP["data"] = v, t.snapshot(v)
-                    return self.json({**_SNAP["data"], "changed": True})
+                    return self.json({**_SNAP["data"], "changed": True, "now": now_ms()})
                 if s["role"] != "admin":
                     return self.json({"error": "Only the admin can do this."}, 403)
                 if p == "/api/settings":
@@ -520,7 +652,7 @@ class Handler(BaseHTTPRequestHandler):
                     used = {}
                     for e in merged_events(t.overrides()):
                         used[e["venue"]] = used.get(e["venue"], 0) + 1
-                    return self.json({"admin": c["admin"] or env_admin_code(),
+                    return self.json({"admin": c["admin"] or env_admin_code(), "points": t.points(cfg),
                                       "venues": [{**v, "pass": c.get(v["code"], ""), "events": used.get(v["code"], 0)} for v in t.venues()]})
                 if p == "/api/export.xlsx":
                     snap = t.snapshot(int(cfg.get("version", "1")))
@@ -529,7 +661,7 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     return self.json({"error": "Not found"}, 404)
             data = build_workbook(snap, acts, vnames)
-            name = "Kalamela2026_Attendance_" + datetime.now(IST).strftime("%Y%m%d_%H%M") + ".xlsx"
+            name = "Kalamela2026_" + datetime.now(IST).strftime("%Y%m%d_%H%M") + ".xlsx"
             return self.send(200, data, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                              {"Content-Disposition": f'attachment; filename="{name}"'})
         except Exception as e:
@@ -570,8 +702,6 @@ class Handler(BaseHTTPRequestHandler):
         cs = codes_of(cfg)
         live_venues = {v["code"] for v in t.venues()}
         admin_codes = {c for c in (cs["admin"].upper(), env_admin_code()) if c}
-        if not admin_codes and not code:
-            return self.json({"error": "No admin code is set. Add KALAMELA_ADMIN_CODE in the hosting settings."}, 400)
         role = venue = None
         if code and code in admin_codes:
             role = "admin"
@@ -588,49 +718,174 @@ class Handler(BaseHTTPRequestHandler):
         return self.json({"user": {"role": role, "venue": venue}}, headers={"Set-Cookie": self.cookie(tok, SESSION_HOURS * 3600)})
 
     def action(self, t, cfg, s, p, b):
-        evs = {e["id"]: e for e in merged_events(t.overrides())}
+        evs = {e["id"]: e for e in merged_events(t.overrides(), t.event_cfg())}
         who = actor(s)
+        admin = s["role"] == "admin"
 
-        if p == "/api/mark":
-            eid, k, st = b.get("e"), str(b.get("k", "")), b.get("s")
+        def event_for_write(eid, allow_closed=False):
             ev = evs.get(eid)
-            if not ev or not any((x.get("chest") or x.get("team")) == k for x in ev["entries"]):
-                return self.json({"error": "Unknown entry."}, 400)
-            if s["role"] != "admin" and ev["venue"] != s["venue"]:
-                return self.json({"error": "This event is not at your venue."}, 403)
-            es = t.one("SELECT state FROM kl_event_state WHERE id=?", (eid,))
-            if es and es["state"] == "done" and s["role"] != "admin":
-                return self.json({"error": "This event is closed. Ask the admin to reopen it."}, 409)
+            if not ev:
+                return None, self.json({"error": "Unknown event."}, 400)
+            if not admin and ev["venue"] != s["venue"]:
+                return None, self.json({"error": "This event is not at your venue."}, 403)
+            if not admin and not allow_closed:
+                es = t.one("SELECT state FROM kl_event_state WHERE id=?", (eid,))
+                if es and es["state"] == "done":
+                    return None, self.json({"error": "This event is finished. Ask the admin to reopen it."}, 409)
+            return ev, None
+
+        def entry_ok(ev, k):
+            return any(key_of(x) == k for x in ev["entries"])
+
+        def set_status(eid, k, st):
             if st in STATUSES:
                 t.run("INSERT INTO kl_attendance(eid,k,status,ts,actor) VALUES(?,?,?,?,?) ON CONFLICT(eid,k) DO UPDATE SET "
                       "status=excluded.status, ts=excluded.ts, actor=excluded.actor", (eid, k, st, now_iso(), who))
             else:
                 t.run("DELETE FROM kl_attendance WHERE eid=? AND k=?", (eid, k))
-            t.log(who, "Marked " + {"present": "present", "done": "performed", "absent": "absent"}.get(st, "cleared"), eid, k)
+
+        if p == "/api/mark":
+            eid, k, st = b.get("e"), str(b.get("k", "")), b.get("s")
+            ev, err = event_for_write(eid)
+            if err:
+                return err
+            if not entry_ok(ev, k):
+                return self.json({"error": "Unknown entry."}, 400)
+            set_status(eid, k, st)
+            if st not in ("present", "done"):
+                t.run("DELETE FROM kl_timer WHERE eid=? AND k=?", (eid, k))
+            t.log(who, "Marked " + {"present": "present", "done": "completed", "absent": "absent"}.get(st, "cleared"), eid, k)
             t.bump()
             return self.json({"ok": True})
+
+        if p == "/api/timer":
+            eid, k, act = b.get("e"), str(b.get("k", "")), b.get("action")
+            ev, err = event_for_write(eid)
+            if err:
+                return err
+            if not entry_ok(ev, k) or act not in ("start", "stop", "reset"):
+                return self.json({"error": "Unknown entry."}, 400)
+            now = now_ms()
+            if act == "start":
+                t.run("INSERT INTO kl_timer(eid,k,started,ended) VALUES(?,?,?,NULL) ON CONFLICT(eid,k) DO UPDATE SET started=excluded.started, ended=NULL",
+                      (eid, k, now))
+                set_status(eid, k, "present")
+                st = t.one("SELECT state FROM kl_event_state WHERE id=?", (eid,))
+                if not st:  # starting someone's timer means the event has started
+                    t.run("INSERT INTO kl_event_state(id,state,ts,actor) VALUES(?,?,?,?) ON CONFLICT(id) DO NOTHING", (eid, "live", now_iso(), who))
+                t.log(who, "Started timer", eid, k)
+            elif act == "stop":
+                row = t.one("SELECT started FROM kl_timer WHERE eid=? AND k=?", (eid, k))
+                if not row or row["started"] is None:
+                    return self.json({"error": "The timer was not started."}, 400)
+                t.run("UPDATE kl_timer SET ended=? WHERE eid=? AND k=?", (now, eid, k))
+                set_status(eid, k, "done")
+                t.log(who, "Submitted / finished", eid, k, fmt_dur(now - int(row["started"])))
+            else:
+                t.run("DELETE FROM kl_timer WHERE eid=? AND k=?", (eid, k))
+                set_status(eid, k, "present")
+                t.log(who, "Reset timer", eid, k)
+            t.bump()
+            return self.json({"ok": True, "now": now})
 
         if p == "/api/event-state":
             eid, st = b.get("e"), b.get("s")
             ev = evs.get(eid)
             if not ev or st not in EVENT_STATES:
                 return self.json({"error": "Unknown event."}, 400)
-            if s["role"] != "admin" and (ev["venue"] != s["venue"] or st == "upcoming"):
+            if not admin and (ev["venue"] != s["venue"] or st == "upcoming"):
                 return self.json({"error": "Only the admin can do this."}, 403)
             cur = t.one("SELECT state FROM kl_event_state WHERE id=?", (eid,))
-            if s["role"] != "admin" and cur and cur["state"] == "done":
-                return self.json({"error": "This event is closed. Ask the admin to reopen it."}, 409)
+            if not admin and cur and cur["state"] == "done":
+                return self.json({"error": "This event is finished. Ask the admin to reopen it."}, 409)
             if st == "upcoming":
                 t.run("DELETE FROM kl_event_state WHERE id=?", (eid,))
             else:
                 t.run("INSERT INTO kl_event_state(id,state,ts,actor) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
                       "state=excluded.state, ts=excluded.ts, actor=excluded.actor", (eid, st, now_iso(), who))
-            t.log(who, {"live": "Started event", "done": "Closed event", "upcoming": "Reset event"}[st], eid)
+                if st == "done":  # stop any timers still running
+                    t.run("UPDATE kl_timer SET ended=? WHERE eid=? AND ended IS NULL", (now_ms(), eid))
+            t.log(who, {"live": "Started event", "done": "Event finished", "upcoming": "Reset event"}[st], eid)
             t.bump()
             return self.json({"ok": True})
 
-        if s["role"] != "admin":
+        if p == "/api/event-cfg":
+            eid = b.get("e")
+            ev = evs.get(eid)
+            if not ev:
+                return self.json({"error": "Unknown event."}, 400)
+            if not admin and ev["venue"] != s["venue"]:
+                return self.json({"error": "This event is not at your venue."}, 403)
+            cur = t.event_cfg().get(eid, {})
+            new = dict(cur)
+            if "judges" in b:
+                j = int(b.get("judges") or 0)
+                if not 1 <= j <= 10:
+                    return self.json({"error": "Judges must be between 1 and 10."}, 400)
+                new["judges"] = j
+            if admin:
+                for key, lo, hi in (("timer", 0, 300), ("timerMin", 0, 300)):
+                    if key in b:
+                        v = float(b.get(key) or 0)
+                        if not lo <= v <= hi:
+                            return self.json({"error": "Timer must be between 0 and 300 minutes."}, 400)
+                        new[key] = v
+            elif "timer" in b or "timerMin" in b:
+                return self.json({"error": "Only the admin can change timers."}, 403)
+            t.run("INSERT INTO kl_event_cfg(id,timer,timer_min,judges) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
+                  "timer=excluded.timer, timer_min=excluded.timer_min, judges=excluded.judges",
+                  (eid, new.get("timer"), new.get("timerMin"), new.get("judges")))
+            t.log(who, "Event settings", eid, "", json.dumps({k: v for k, v in new.items()}))
+            t.bump()
+            return self.json({"ok": True})
+
+        if p == "/api/sheet":
+            eid, data = b.get("e"), b.get("data")
+            ev, err = event_for_write(eid, allow_closed=True)
+            if err:
+                return err
+            if not isinstance(data, dict):
+                return self.json({"error": "Nothing to save."}, 400)
+            maxes = [c["max"] for c in ev["criteria"]]
+            clean = {}
+            for k, judges in data.items():
+                if not entry_ok(ev, k) or not isinstance(judges, list):
+                    continue
+                rows = []
+                for vals in judges[:10]:
+                    row = []
+                    for i, v in enumerate((vals or [])[:len(maxes)]):
+                        if v in (None, ""):
+                            row.append(None)
+                            continue
+                        try:
+                            v = float(v)
+                        except (TypeError, ValueError):
+                            return self.json({"error": f"{k}: marks must be numbers."}, 400)
+                        if v < 0 or (maxes[i] and v > maxes[i]):
+                            return self.json({"error": f"{k}: {ev['criteria'][i]['name']} must be between 0 and {maxes[i]}."}, 400)
+                        row.append(int(v) if v == int(v) else v)
+                    rows.append(row)
+                clean[k] = rows
+            t.run("INSERT INTO kl_sheet(eid,data,ts,actor) VALUES(?,?,?,?) ON CONFLICT(eid) DO UPDATE SET data=excluded.data, ts=excluded.ts, actor=excluded.actor",
+                  (eid, json.dumps(clean), now_iso(), who))
+            t.log(who, "Saved marks", eid)
+            t.bump()
+            return self.json({"ok": True})
+
+        if not admin:
             return self.json({"error": "Only the admin can do this."}, 403)
+
+        if p == "/api/points":
+            try:
+                pts = {"ind": [float(x) for x in b["ind"]][:3], "grp": [float(x) for x in b["grp"]][:3]}
+                assert len(pts["ind"]) == 3 and len(pts["grp"]) == 3 and all(0 <= x <= 1000 for x in pts["ind"] + pts["grp"])
+            except Exception:
+                return self.json({"error": "Enter points for 1st, 2nd and 3rd as numbers."}, 400)
+            t.set_config("points", json.dumps(pts))
+            t.log(who, "Changed points", "", "", json.dumps(pts))
+            t.bump()
+            return self.json({"ok": True})
 
         if p == "/api/event-edit":
             eid = b.get("e")
@@ -638,16 +893,11 @@ class Handler(BaseHTTPRequestHandler):
             if not o:
                 return self.json({"error": "Unknown event."}, 400)
             venue = b.get("venue") if b.get("venue") in {v["code"] for v in t.venues()} else None
-            start, end = b.get("start"), b.get("end")
-            vals = (venue if venue and venue != o["venue"] else None,
-                    int(start) if isinstance(start, (int, float)) and int(start) != o["start"] else None,
-                    int(end) if isinstance(end, (int, float)) and int(end) != o["end"] else None)
-            if any(v is not None for v in vals):
-                t.run("INSERT INTO kl_event_override(id,venue,start_m,end_m) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
-                      "venue=excluded.venue, start_m=excluded.start_m, end_m=excluded.end_m", (eid, *vals))
+            if venue and venue != o["venue"]:
+                t.run("INSERT INTO kl_event_override(id,venue) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET venue=excluded.venue", (eid, venue))
             else:
                 t.run("DELETE FROM kl_event_override WHERE id=?", (eid,))
-            t.log(who, "Edited event", eid, "", json.dumps({"venue": venue, "start": start, "end": end}))
+            t.log(who, "Moved event", eid, "", venue or o["venue"])
             t.bump()
             return self.json({"ok": True})
 
@@ -655,8 +905,8 @@ class Handler(BaseHTTPRequestHandler):
             venues = t.venues()
             codes = codes_of(cfg)
             given = {str(v.get("code")): v for v in (b.get("venues") or []) if isinstance(v, dict)}
-            admin = str(b.get("admin", codes["admin"])).strip().upper()
-            names, passes = {}, {"admin": admin}
+            admin_code = str(b.get("admin", codes["admin"])).strip().upper()
+            names, passes = {}, {"admin": admin_code}
             for v in venues:
                 g = given.get(v["code"], {})
                 names[v["code"]] = str(g.get("name", v["name"])).strip()[:60]
@@ -671,7 +921,7 @@ class Handler(BaseHTTPRequestHandler):
             for k, v in passes.items():
                 t.set_config("code_" + k, v)
             if changed:
-                t.set_config("codes_version", int(cfg.get("codes_version", "1")) + 1)  # signs out every other device
+                t.set_config("codes_version", int(cfg.get("codes_version", "1")) + 1)
             t.log(who, "Saved venues and codes" + (" (codes changed)" if changed else ""))
             t.bump()
             cfg = t.config()
@@ -706,7 +956,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json({"error": "At least one venue is needed."}, 400)
             n = sum(1 for e in evs.values() if e["venue"] == code)
             if n:
-                return self.json({"error": f"Move its {n} event(s) to another venue first, on the Events & schedule page."}, 409)
+                return self.json({"error": f"Move its {n} event(s) to another venue first, on the Events page."}, 409)
             t.run("DELETE FROM kl_venue WHERE code=?", (code,))
             t.run("DELETE FROM kl_config WHERE name=?", ("code_" + code,))
             t.log(who, "Removed venue", "", code)
@@ -714,45 +964,60 @@ class Handler(BaseHTTPRequestHandler):
             return self.json({"ok": True})
 
         if p == "/api/reset":
-            t.run("DELETE FROM kl_attendance")
-            t.run("DELETE FROM kl_event_state")
-            t.log(who, "Reset all attendance")
+            for tbl in ("kl_attendance", "kl_event_state", "kl_timer", "kl_sheet"):
+                t.run(f"DELETE FROM {tbl}")
+            t.log(who, "Reset attendance, timers and marks")
             t.bump()
             return self.json({"ok": True})
 
         if p == "/api/sample":
             import random
-            rnd = random.Random(11)
-            now_m = int(b.get("now", 11 * 60 + 47))
-            ts = now_iso()
-            t.run("DELETE FROM kl_attendance")
-            t.run("DELETE FROM kl_event_state")
-            att, est = [], []
-            for ev in merged_events(t.overrides()):
-                if ev["end"] <= now_m:
-                    est.append((ev["id"], "done"))
-                    att += [(ev["id"], en.get("chest") or en.get("team"), "done") for en in ev["entries"] if rnd.random() < 0.9]
-                elif ev["start"] <= now_m:
-                    est.append((ev["id"], "live"))
-                    for en in ev["entries"]:
-                        k = en.get("chest") or en.get("team")
-                        if ev["type"] == "offstage":
-                            stt = "present" if rnd.random() < 0.85 else None
-                        elif en["time"] < now_m - 6:
-                            stt = "done" if rnd.random() < 0.85 else None
-                        elif en["time"] <= now_m + 4:
-                            stt = "present" if rnd.random() < 0.7 else None
-                        else:
-                            stt = None
-                        if stt:
-                            att.append((ev["id"], k, stt))
+            rnd = random.Random(7)
+            now, ts = now_ms(), now_iso()
+            for tbl in ("kl_attendance", "kl_event_state", "kl_timer", "kl_sheet"):
+                t.run(f"DELETE FROM {tbl}")
             ph = "%s" if t.pg else "?"
+            att, est, tmr, sheets = [], [], [], []
+            for ev in evs.values():
+                r = rnd.random()
+                state = "done" if r < 0.4 else "live" if r < 0.75 else None
+                if not state:
+                    continue
+                est.append((ev["id"], state))
+                marks = {}
+                for i, en in enumerate(ev["entries"]):
+                    k = key_of(en)
+                    if state == "done":
+                        if rnd.random() < 0.1:
+                            continue  # absent
+                        att.append((ev["id"], k, "done"))
+                        if ev["timer"]:
+                            dur = int(ev["timer"] * 60000 * rnd.uniform(0.6, 1.1))
+                            tmr.append((ev["id"], k, now - 3600000 - dur, now - 3600000))
+                        marks[k] = [[round(c["max"] * rnd.uniform(0.55, 0.95)) if c["max"] else rnd.randint(2, 10) for c in ev["criteria"]]
+                                    for _ in range(ev["judges"])]
+                    else:
+                        x = rnd.random()
+                        if x < 0.25:
+                            continue  # not here yet
+                        if x < 0.45:
+                            att.append((ev["id"], k, "done"))
+                            if ev["timer"]:
+                                tmr.append((ev["id"], k, now - int(ev["timer"] * 60000), now - 60000))
+                        else:
+                            att.append((ev["id"], k, "present"))
+                            if ev["timer"] and rnd.random() < 0.8:
+                                tmr.append((ev["id"], k, now - int(ev["timer"] * 60000 * rnd.uniform(0.2, 1.25)), None))
+                if marks:
+                    sheets.append((ev["id"], json.dumps(marks)))
             if est:
-                t.cur.executemany(f"INSERT INTO kl_event_state(id,state,ts,actor) VALUES({ph},{ph},{ph},{ph})",
-                                  [(i, s_, ts, "practice") for i, s_ in est])
+                t.cur.executemany(f"INSERT INTO kl_event_state(id,state,ts,actor) VALUES({ph},{ph},{ph},{ph})", [(i, s_, ts, "practice") for i, s_ in est])
             if att:
-                t.cur.executemany(f"INSERT INTO kl_attendance(eid,k,status,ts,actor) VALUES({ph},{ph},{ph},{ph},{ph})",
-                                  [(e, k, s_, ts, "practice") for e, k, s_ in att])
+                t.cur.executemany(f"INSERT INTO kl_attendance(eid,k,status,ts,actor) VALUES({ph},{ph},{ph},{ph},{ph})", [(e, k, s_, ts, "practice") for e, k, s_ in att])
+            if tmr:
+                t.cur.executemany(f"INSERT INTO kl_timer(eid,k,started,ended) VALUES({ph},{ph},{ph},{ph})", tmr)
+            if sheets:
+                t.cur.executemany(f"INSERT INTO kl_sheet(eid,data,ts,actor) VALUES({ph},{ph},{ph},{ph})", [(e, d, ts, "practice") for e, d in sheets])
             t.log(who, "Loaded practice data")
             t.bump()
             return self.json({"ok": True})
