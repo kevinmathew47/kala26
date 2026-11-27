@@ -25,6 +25,8 @@ const ICON = {
   play: '<path d="M6 4l14 8-14 8z"/>',
   flag: '<path d="M5 21V4M5 4h11l-2 4 2 4H5"/>',
   timer: '<circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2M9 2h6"/>',
+  arrow: '<path d="M5 12h14M13 6l6 6-6 6"/>',
+  chart: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
   bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.9 1.9 0 0 0 3.4 0"/>'
 };
 const icon = k => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON[k]}</svg>`;
@@ -147,6 +149,46 @@ function championship() {
   const female = rank(Object.entries(ind).filter(([k]) => (PEOPLE[k] || {}).gender === "Female").map(([k, d]) => ({ k, v: d.points, d })));
   const churches = rank(Object.entries(church).map(([k, v]) => ({ k, v })));
   return { per, male, female, churches };
+}
+
+/* next event for a participant: open events first, then ones not started */
+function nextStop(c, hereId) {
+  const todo = info(c).list.filter(x => x.ev.id !== hereId && x.st === "waiting" && x.es !== "done");
+  todo.sort((a, b) => (b.es === "live") - (a.es === "live"));
+  return todo[0] || null;
+}
+function nextHTML(c, hereId) {
+  const n = nextStop(c, hereId);
+  if (!n) return `<div class="next none">${icon("flag")}No more events today</div>`;
+  const live = n.es === "live";
+  return `<div class="next ${live ? "go" : ""}">${icon("arrow")}<span>Next: <b>${esc(short(n.ev.title))}</b> at ${vbadge(n.ev.venue)} ${esc(vName(n.ev.venue))} ${live ? badge("live", "Open now") : badge("upcoming", "Not started yet")}</span></div>`;
+}
+function liveStrip() {
+  const live = IDX.evs.filter(e => stateOf(e.id) === "live");
+  const open = ui.lbOpen && live.find(e => e.id === ui.lbOpen);
+  const items = live.map(e => { const c = counts(e);
+    return `<button class="lb-item ${open && open.id === e.id ? "on" : ""}" style="--vc:${vcolor(e.venue)}" data-act="lb" data-e="${e.id}" aria-expanded="${open && open.id === e.id}">
+      <span class="lb-v">${esc(e.venue)} · ${esc(vName(e.venue))}</span><b>${esc(short(e.title))}</b>
+      <span class="lb-c"><span>${c.waiting} to come</span><span>${c.running + c.present} here</span><span>${c.done} done</span></span></button>`; }).join("");
+  let detail = "";
+  if (open) {
+    const waiting = open.entries.filter(en => entryStatus(open, keyOf(en)) === "waiting");
+    detail = `<div class="lb-detail"><b>Still to come at ${esc(vName(open.venue))} · ${esc(short(open.title))}</b>
+      <div class="chips">${waiting.map(en => `<button class="chip" data-act="person" data-c="${esc(en.chest || en.members[0])}"><b>${esc(keyOf(en))}</b> ${esc(en.team ? teamParish(en) : (PEOPLE[en.chest] || {}).name)}</button>`).join("") || '<span class="muted">Everyone has arrived.</span>'}</div>
+      ${isAdmin() ? `<button class="btn sm" data-act="open-ev" data-e="${open.id}">Open this event</button>` : ""}</div>`;
+  }
+  return `<section class="livebar"><div class="lb-h">${badge("live", "Live now")}<span class="muted">${live.length ? `${live.length} event${live.length > 1 ? "s" : ""} open across all venues — tap one to see who is still to come` : "No event is open right now"}</span></div>
+    ${live.length ? `<div class="lb-items">${items}</div>` : ""}${detail}</section>`;
+}
+function hbars(rows, opts = {}) {
+  if (!rows.length) return `<div class="empty">${opts.empty || "No results yet."}</div>`;
+  const max = Math.max(opts.threshold || 0, ...rows.map(r => r.v), 1);
+  return `<div class="hb" role="list">${rows.map(r => `<div class="hb-row" role="listitem" data-tip="${esc(r.tip)}" ${r.act ? `data-act="${r.act}" data-c="${esc(r.c || "")}" tabindex="0"` : ""}>
+      <span class="hb-rank">${r.rank <= 3 ? `<span class="medal m${r.rank}">${r.rank}</span>` : r.rank}</span>
+      <span class="hb-name">${esc(r.label)}<small>${esc(r.sub || "")}</small></span>
+      <span class="hb-track">${opts.threshold ? `<span class="hb-th" style="left:${opts.threshold / max * 100}%"></span>` : ""}<i class="${r.rank <= 3 ? "top" : ""}" style="width:${Math.max(1, r.v / max * 100)}%"></i></span>
+      <span class="hb-v">${r.v}</span></div>`).join("")}</div>
+    ${opts.threshold ? `<div class="hb-note"><span class="hb-th-key"></span>${opts.threshold} points needed for the award</div>` : ""}`;
 }
 
 /* ================= actions ================= */
@@ -330,7 +372,7 @@ function vDashboard() {
     return `<div class="card venue" style="--vc:${vcolor(v.code)}">
       <div class="card-h">${vbadge(v.code)}<h2>${esc(v.name)}</h2><span class="grow"></span><span class="sub">${d}/${evs.length} finished</span></div>
       <div class="card-b">
-        ${live.length ? live.map(e => { const c = counts(e); return `<div class="now-ev"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${badge("live", "In progress")}<a href="#venues" data-act="open-ev" data-e="${e.id}">${esc(short(e.title))}</a></div>${progress(c, e.entries.length)}</div>`; }).join("") : `<div class="muted">No event in progress.</div>`}
+        ${live.length ? live.map(e => { const c = counts(e); return `<button class="now-ev" data-act="open-ev" data-e="${e.id}"><span class="t">${esc(short(e.title))}</span>${progressBar(c, e.entries.length)}<span class="nums"><span>${c.waiting} to come</span><span>${c.running} timing</span><span>${c.done} done</span>${c.absent ? `<span class="r">${c.absent} absent</span>` : ""}</span></button>`; }).join("") : `<div class="muted">No event open.</div>`}
         ${marksDue ? `<div class="kv-row"><span class="muted">Marks to enter</span><span>${marksDue} finished event${marksDue > 1 ? "s" : ""}</span></div>` : ""}
       </div></div>`;
   }).join("");
@@ -350,6 +392,7 @@ function vDashboard() {
   return `
     <div class="stats">${stats}</div>
     <div class="venue-grid">${venues}</div>
+    <div class="status-key"><span><i style="background:var(--line-2)"></i>To come</span><span><i style="background:var(--green)"></i>Here</span><span><i style="background:var(--amber)"></i>Timing</span><span><i style="background:var(--blue)"></i>Done</span><span><i style="background:var(--red)"></i>Absent</span></div>
     <div class="grid-2">
       <div class="card"><div class="card-h"><h2>${icon("bell")} Over time now</h2><span class="grow"></span>${over.length ? badge("over", over.length + " over") : ""}</div>
         <div class="list">${overHTML || `<div class="empty">Nobody is over their time limit.</div>`}</div></div>
@@ -373,29 +416,41 @@ function progress(c, total) {
 /* ---------- venue desk ---------- */
 function vDesk(venue) {
   const evs = IDX.evs.filter(e => e.venue === venue);
-  if (!evs.length) return `<div class="card empty">No events are assigned to ${esc(vName(venue))}.</div>`;
+  if (!evs.length) return liveStrip() + `<div class="card empty">No events are assigned to ${esc(vName(venue))}.</div>`;
   let sel = evs.find(e => e.id === ui.sel);
   if (!sel) sel = evs.find(e => stateOf(e.id) === "live") || evs.find(e => stateOf(e.id) === "upcoming") || evs[0];
-  const items = evs.map(e => { const c = counts(e), rep = c.present + c.running + c.done;
-    return `<button class="ev-item ${e.id === sel.id ? "sel" : ""}" data-act="sel" data-e="${e.id}"><span class="nm">${esc(short(e.title))}</span><span class="mt">${badge(evLabel(e.id))}<span>${rep}/${e.entries.length} arrived</span>${c.running ? `<span class="badge amber">${c.running} timing</span>` : ""}</span></button>`; }).join("");
-  const select = `<div class="ev-select"><label class="sr" for="evsel">Event</label><select class="input" id="evsel" data-act="sel-select">${evs.map(e => `<option value="${e.id}" ${e.id === sel.id ? "selected" : ""}>${esc(short(e.title))} · ${LBL[evLabel(e.id)]}</option>`).join("")}</select></div>`;
-  return `${select}<div class="desk"><div class="ev-list">${items}</div><div style="min-width:0;display:grid;gap:16px">${callSheet(sel)}</div></div>`;
+  const item = e => { const c = counts(e), here = c.present + c.running + c.done;
+    return `<button class="ev-item ${e.id === sel.id ? "sel" : ""} st-${stateOf(e.id)}" data-act="sel" data-e="${e.id}"><span class="nm">${esc(short(e.title))}</span>
+      <span class="mt">${stateOf(e.id) === "upcoming" ? `${e.entries.length} ${e.type === "group" ? "teams" : "participants"}` : `${here}/${e.entries.length} arrived`}${c.running ? ` · <b class="amber-t">${c.running} timing</b>` : ""}</span></button>`; };
+  const groups = [["live", "Open now"], ["upcoming", "Not started"], ["done", "Finished"]].map(([st, label]) => {
+    const list = evs.filter(e => stateOf(e.id) === st); return list.length ? `<div class="ev-group"><div class="ev-gh">${label}<span>${list.length}</span></div>${list.map(item).join("")}</div>` : ""; }).join("");
+  const select = `<div class="ev-select"><label class="sr" for="evsel">Event</label><select class="input" id="evsel" data-act="sel-select">${[["live", "Open now"], ["upcoming", "Not started"], ["done", "Finished"]].map(([st, label]) => { const l = evs.filter(e => stateOf(e.id) === st); return l.length ? `<optgroup label="${label}">${l.map(e => `<option value="${e.id}" ${e.id === sel.id ? "selected" : ""}>${esc(short(e.title))}</option>`).join("")}</optgroup>` : ""; }).join("")}</select></div>`;
+  return `${liveStrip()}${select}<div class="desk"><div class="ev-list">${groups}</div><div style="min-width:0;display:grid;gap:16px">${callSheet(sel)}</div></div>`;
 }
 function callSheet(ev) {
   const st = stateOf(ev.id), c = counts(ev), admin = isAdmin();
   const tab = ui.tab[ev.id] || (st === "done" ? "marks" : "people");
   let ctl = "";
-  if (st === "upcoming") ctl = `<button class="btn success" data-act="start" data-e="${ev.id}">${icon("play")}Start event</button>`;
-  else if (st === "live") ctl = `<button class="btn danger" data-act="ask-close" data-e="${ev.id}">${icon("flag")}Event finished</button>`;
+  if (st === "upcoming") ctl = `<button class="btn success big" data-act="start" data-e="${ev.id}">${icon("play")}Start event</button>`;
+  else if (st === "live") ctl = `<button class="btn danger big" data-act="ask-close" data-e="${ev.id}">${icon("flag")}Event finished</button>`;
   else if (admin) ctl = `<button class="btn" data-act="reopen" data-e="${ev.id}">Reopen</button>`;
   const conf = ui.confirm && ui.confirm.e === ev.id ? `<div class="confirm"><span>Finish <b>${esc(short(ev.title))}</b>? ${c.waiting ? `<b>${c.waiting}</b> not arrived will be recorded as absent. ` : ""}${c.running ? `<b>${c.running}</b> running timer(s) will stop. ` : ""}Then enter the judges' marks.</span><button class="btn sm" data-act="cancel">Not yet</button><button class="btn sm danger" data-act="close" data-e="${ev.id}">Finish event</button></div>` : "";
-  return `<div class="card">
-    <div class="sheet-head">${vbadge(ev.venue)}<div class="grow"><h2>${esc(short(ev.title))}</h2><div class="meta">${esc(vName(ev.venue))} · ${ev.entries.length} ${ev.type === "group" ? "teams" : "participants"}${ev.timer ? ` · ${icon("timer")} ${timerText(ev)}` : ""}</div></div>${badge(evLabel(ev.id))}${ctl}</div>
+  const f = (ui.af || {})[ev.id] || "all";
+  const FILT = [["all", "All", ev.entries.length, ""], ["waiting", "To come", c.waiting, "var(--line-2)"], ["here", "Here", c.present, "var(--green)"], ["running", "Timing", c.running, "var(--amber)"], ["done", "Done", c.done, "var(--blue)"], ["absent", "Absent", c.absent, "var(--red)"]];
+  const shown = ev.entries.filter(en => { const s = entryStatus(ev, keyOf(en)); return f === "all" || (f === "here" ? s === "present" : s === f); });
+  return `<div class="card sheet" style="--vc:${vcolor(ev.venue)}">
+    <div class="sheet-head"><div class="grow"><div class="eyebrow">${vbadge(ev.venue)} ${esc(vName(ev.venue))} ${badge(evLabel(ev.id))}</div><h2>${esc(short(ev.title))}</h2>
+      <div class="meta">${ev.entries.length} ${ev.type === "group" ? "teams" : "participants"}${ev.timer ? ` · ${icon("timer")} ${timerText(ev)}` : ""} · ${ev.judges} judge${ev.judges > 1 ? "s" : ""}</div></div>${ctl}</div>
     ${conf}
-    <div class="sheet-prog">${progress(c, ev.entries.length)}</div>
+    <div class="sheet-prog">${progressBar(c, ev.entries.length)}</div>
     <div class="tabs-in"><button class="${tab === "people" ? "on" : ""}" data-act="tab" data-e="${ev.id}" data-t="people">Attendance</button><button class="${tab === "marks" ? "on" : ""}" data-act="tab" data-e="${ev.id}" data-t="marks">Judges' marks${st === "done" ? ` <span class="c">${markedCount(ev)}/${ev.entries.length - c.absent}</span>` : ""}</button></div>
-    ${tab === "marks" ? marksPanel(ev) : `<div>${ev.entries.map(en => entryRow(ev, en)).join("")}</div>`}
+    ${tab === "marks" ? marksPanel(ev) : `<div class="afilter" role="tablist">${FILT.filter(x => x[0] === "all" || x[2] || f === x[0]).map(([k, l, n, col]) => `<button class="${f === k ? "on" : ""}" data-act="af" data-e="${ev.id}" data-f="${k}" role="tab" aria-selected="${f === k}">${col ? `<i style="background:${col}"></i>` : ""}${l}<span>${n}</span></button>`).join("")}</div>
+      <div class="entries">${shown.map(en => entryRow(ev, en)).join("") || `<div class="empty">Nobody here.</div>`}</div>`}
   </div>`;
+}
+function progressBar(c, total) {
+  const p = x => total ? x / total * 100 : 0;
+  return `<div class="bar" role="img" aria-label="${c.done} done, ${c.running} timing, ${c.present} here, ${c.absent} absent, ${c.waiting} to come"><i style="width:${p(c.done)}%;background:var(--blue)"></i><i style="width:${p(c.running)}%;background:var(--amber)"></i><i style="width:${p(c.present)}%;background:var(--green)"></i><i style="width:${p(c.absent)}%;background:var(--red)"></i></div>`;
 }
 function whereHTML(c, hereId) {
   const i = info(c);
@@ -415,8 +470,9 @@ function entryRow(ev, en) {
     if (busy.length && s === "waiting") where = `<div class="where">${badge("called", busy.length + " member" + (busy.length > 1 ? "s" : "") + " busy at another event")}</div>`;
   } else {
     const p = PEOPLE[en.chest] || { name: en.chest, parish: "" };
-    who = `<div class="nm"><a href="#" data-act="person" data-c="${en.chest}">${esc(p.name)}</a></div><div class="sub">${esc(p.parish)}${p.phone ? " · " + esc(p.phone) : ""}</div>`;
+    who = `<div class="nm"><a href="#" data-act="person" data-c="${en.chest}">${esc(p.name)}</a></div><div class="sub">${esc(p.parish)}</div>`;
     if (s === "waiting" && !closed) where = `<div class="where">${whereHTML(en.chest, ev.id)}</div>`;
+    if (s === "done") where = nextHTML(en.chest, ev.id);
   }
   const tw = t && t.s ? `<div class="timer ${t.e ? "stopped" : ""}" data-tmr="${ev.id}|${esc(k)}"><span class="tv">0:00</span>${ev.timer ? `<span class="tb"><i></i></span>` : ""}<span class="tn"></span></div>` : "";
   const b = (cls, lab, a, extra = "") => `<button class="btn sm ${cls}" data-act="${a}" data-e="${ev.id}" data-k="${esc(k)}" ${extra}>${lab}</button>`;
@@ -486,7 +542,7 @@ function pTable() {
 
 /* ---------- find (volunteer) ---------- */
 function vFind() {
-  return `<div class="toolbar"><div class="search">${icon("search")}<input class="input" id="findq" placeholder="Type a chest number or name" value="${esc(ui.findQ)}" aria-label="Find a participant"></div></div>
+  return `${liveStrip()}<div class="toolbar"><div class="search">${icon("search")}<input class="input" id="findq" placeholder="Type a chest number or name" value="${esc(ui.findQ)}" aria-label="Find a participant"></div></div>
   <div class="card"><div class="list" id="findres">${findRows()}</div></div>`;
 }
 function findRows() {
@@ -500,37 +556,43 @@ function findRows() {
 /* ---------- results & rankings (admin) ---------- */
 function vResults() {
   const ch = championship();
-  const medal = r => r <= 3 ? `<span class="medal m${r}">${r}</span>` : r;
-  const indTable = (list, label) => `<div class="card"><div class="card-h"><h2>${label}</h2><span class="sub">Points from individual events</span></div>
-    <div class="table-wrap"><table class="t"><thead><tr><th>Rank</th><th>Participant</th><th>Parish</th><th class="num">1st</th><th class="num">2nd</th><th class="num">3rd</th><th class="num">Points</th></tr></thead><tbody>
-    ${list.slice(0, 10).map(x => { const p = PEOPLE[x.k] || {}; return `<tr class="${x.rank <= 3 ? "win r" + x.rank : ""} click" data-act="person" data-c="${x.k}"><td>${medal(x.rank)}</td><td><b>${esc(x.k)}</b> ${esc(p.name)}</td><td class="sub">${esc(p.parish)}</td><td class="num">${x.d.r[0] || ""}</td><td class="num">${x.d.r[1] || ""}</td><td class="num">${x.d.r[2] || ""}</td><td class="num"><b>${x.v}</b></td></tr>`; }).join("") || `<tr><td colspan="7" class="empty">No results yet.</td></tr>`}
-    </tbody></table></div></div>`;
   const done = ch.per.filter(x => stateOf(x.ev.id) === "done");
+  const complete = done.filter(x => markedCount(x.ev) >= x.ev.entries.length - counts(x.ev).absent && x.scored).length;
   const award = (list, title) => { const top = list.filter(x => x.rank === 1 && x.v >= AWARD_MIN);
-    return `<div class="card stat ${top.length ? "green" : ""}"><span class="lbl">${title}</span><span class="val" style="font-size:20px">${top.length ? top.map(x => `${esc(x.k)} ${esc((PEOPLE[x.k] || {}).name)}`).join("<br>") : "Not decided yet"}</span>
-      <span class="foot">${top.length ? `${top[0].v} points · ${esc((PEOPLE[top[0].k] || {}).parish)}` : `Needs at least ${AWARD_MIN} points from individual events${list[0] ? ` · leader has ${list[0].v}` : ""}`}</span></div>`; };
+    return `<div class="card award ${top.length ? "won" : ""}"><div class="aw-t">${icon("trophy")}${title}</div>
+      <div class="aw-n">${top.length ? top.map(x => `${esc((PEOPLE[x.k] || {}).name)} <small>${esc(x.k)}</small>`).join("<br>") : "Not decided yet"}</div>
+      <div class="aw-f">${top.length ? `${top[0].v} points · ${esc((PEOPLE[top[0].k] || {}).parish)}` : `Needs at least ${AWARD_MIN} points from individual events${list[0] ? ` · leader ${esc(list[0].k)} has ${list[0].v}` : ""}`}</div></div>`; };
+  const people = list => list.slice(0, 8).map(x => { const p = PEOPLE[x.k] || {};
+    return { rank: x.rank, label: `${x.k} ${p.name || ""}`, sub: (p.parish || "").replace("Mar Thoma Church", "MTC"), v: x.v, act: "person", c: x.k,
+      tip: `${p.name}: ${x.v} points — ${x.d.r[0]} first, ${x.d.r[1]} second, ${x.d.r[2]} third` }; });
+  const churches = ch.churches.map(x => ({ rank: x.rank, label: x.k.replace("Mar Thoma Church", "MTC"), v: x.v, tip: `${x.k}: ${x.v} points` }));
+  const stat = (cls, lbl, val, foot) => `<div class="card stat ${cls}"><span class="lbl">${lbl}</span><span class="val">${val}</span><span class="foot">${foot}</span></div>`;
   return `
-  <div class="grid-2">${award(ch.male, "Kalaprathibha (top male)")}${award(ch.female, "Kalathilakam (top female)")}</div>
+  <div class="grid-2">${award(ch.male, "Kalaprathibha")}${award(ch.female, "Kalathilakam")}</div>
+  <div class="stats four">
+    ${stat("blue", "Events finished", `${done.length}<small> / ${ch.per.length}</small>`, "Pressed Event finished")}
+    ${stat("green", "Results complete", `${complete}<small> / ${done.length || 0}</small>`, "All judges' marks entered")}
+    ${stat("", "Churches with points", ch.churches.length, "Out of " + new Set(BOOT.people.map(p => p.parish)).size + " churches")}
+    ${stat("amber", "Prize winners", new Set(ch.per.flatMap(x => x.win.map(w => w.k))).size, "Placed 1st, 2nd or 3rd")}
+  </div>
+  <div class="card"><div class="card-h"><h2>${icon("chart")} Church championship</h2><span class="sub">Points from every individual and group event</span></div>
+    <div class="card-b">${hbars(churches, { empty: "Church points appear here as soon as results are entered." })}</div></div>
+  <div class="grid-2">
+    <div class="card"><div class="card-h"><h2>${icon("chart")} Kalaprathibha race</h2><span class="sub">Top male participants</span></div><div class="card-b">${hbars(people(ch.male), { threshold: AWARD_MIN })}</div></div>
+    <div class="card"><div class="card-h"><h2>${icon("chart")} Kalathilakam race</h2><span class="sub">Top female participants</span></div><div class="card-b">${hbars(people(ch.female), { threshold: AWARD_MIN })}</div></div>
+  </div>
+  <div class="card"><div class="card-h"><h2>Event results</h2><span class="sub">${done.length} of ${ch.per.length} events finished</span></div>
+    <div class="table-wrap"><table class="t cards"><thead><tr><th>Event</th><th>Status</th><th>1st</th><th>2nd</th><th>3rd</th><th>Marks</th></tr></thead><tbody>
+    ${ch.per.map(({ ev, win }) => { const place = r => win.filter(w => w.rank === r).map(w => `<b>${esc(w.k)}</b> ${esc(w.en.team ? teamParish(w.en) : (PEOPLE[w.k] || {}).name)} <span class="sub">${w.total}</span>`).join("<br>") || '<span class="muted">–</span>';
+      const need = ev.entries.length - counts(ev).absent, mc = markedCount(ev);
+      return `<tr class="click" data-act="open-ev" data-e="${ev.id}"><td class="lead" data-l="Event"><b>${esc(short(ev.title))}</b> ${vbadge(ev.venue)}</td><td data-l="Status">${badge(evLabel(ev.id))}</td><td data-l="1st">${place(1)}</td><td data-l="2nd">${place(2)}</td><td data-l="3rd">${place(3)}</td><td data-l="Marks">${stateOf(ev.id) === "done" ? (mc >= need ? badge("done", "Complete") : badge("called", `${mc}/${need}`)) : '<span class="muted">–</span>'}</td></tr>`; }).join("")}
+    </tbody></table></div></div>
   <div class="card"><div class="card-b toolbar" style="justify-content:space-between">
     <div><b>Points per place</b><div class="muted" style="font-size:12.5px">As per the Kalamela Manual: individual 5 / 3 / 1, group 15 / 10 / 5. Below 50% marks earns no place or points. Ties share the place and its points.</div></div>
     <form id="points-form" class="toolbar">
       <span class="muted">Individual</span>${[0, 1, 2].map(i => `<input class="input pts" id="pi${i}" type="number" min="0" step="0.5" value="${S.points.ind[i]}" aria-label="Individual ${i + 1} place points">`).join("")}
       <span class="muted">Group</span>${[0, 1, 2].map(i => `<input class="input pts" id="pg${i}" type="number" min="0" step="0.5" value="${S.points.grp[i]}" aria-label="Group ${i + 1} place points">`).join("")}
-      <button class="btn primary sm" type="submit">Save points</button></form></div></div>
-  <div class="grid-3">
-    ${indTable(ch.male, "Top male participants")}
-    ${indTable(ch.female, "Top female participants")}
-    <div class="card"><div class="card-h"><h2>Church championship</h2><span class="sub">All events, individual and group</span></div>
-      <div class="table-wrap"><table class="t"><thead><tr><th>Rank</th><th>Church</th><th class="num">Points</th></tr></thead><tbody>
-      ${ch.churches.map(x => `<tr class="${x.rank <= 3 ? "win r" + x.rank : ""}"><td>${medal(x.rank)}</td><td>${esc(x.k)}</td><td class="num"><b>${x.v}</b></td></tr>`).join("") || `<tr><td colspan="3" class="empty">No results yet.</td></tr>`}
-      </tbody></table></div></div>
-  </div>
-  <div class="card"><div class="card-h"><h2>Event results</h2><span class="sub">${done.length} of ${ch.per.length} events finished</span></div>
-    <div class="table-wrap"><table class="t cards"><thead><tr><th>Event</th><th>Status</th><th>1st</th><th>2nd</th><th>3rd</th><th>Marks</th></tr></thead><tbody>
-    ${ch.per.map(({ ev, win, scored }) => { const place = r => win.filter(w => w.rank === r).map(w => `<b>${esc(w.k)}</b> ${esc(w.en.team ? teamParish(w.en) : (PEOPLE[w.k] || {}).name)} <span class="sub">${w.total}</span>`).join("<br>") || '<span class="muted">–</span>';
-      const need = ev.entries.length - counts(ev).absent, mc = markedCount(ev);
-      return `<tr class="click" data-act="open-ev" data-e="${ev.id}"><td class="lead" data-l="Event"><b>${esc(short(ev.title))}</b> ${vbadge(ev.venue)}</td><td data-l="Status">${badge(evLabel(ev.id))}</td><td data-l="1st">${place(1)}</td><td data-l="2nd">${place(2)}</td><td data-l="3rd">${place(3)}</td><td data-l="Marks">${stateOf(ev.id) === "done" ? (mc >= need ? badge("done", "Complete") : badge("called", `${mc}/${need}`)) : '<span class="muted">–</span>'}</td></tr>`; }).join("")}
-    </tbody></table></div></div>`;
+      <button class="btn primary sm" type="submit">Save points</button></form></div></div>`;
 }
 
 /* ---------- events (admin) ---------- */
@@ -635,9 +697,11 @@ document.addEventListener("click", e => {
       if (isAdmin()) { ui.venue = ev.venue; if (location.hash !== "#venues") { location.hash = "venues"; return; } } render(true); window.scrollTo(0, 0); break; }
     case "filter": ui.filter = t.dataset.f; render(true); break;
     case "person": ui.person = t.dataset.c; renderSheet(); break;
-    case "mark": mark(E, K, t.dataset.s || null); break;
+    case "mark": mark(E, K, t.dataset.s || null).then(() => { if (t.dataset.s === "done") tellNext(E, K); }); break;
+    case "lb": ui.lbOpen = ui.lbOpen === E ? null : E; render(true); break;
+    case "af": (ui.af ||= {})[E] = t.dataset.f; render(true); break;
     case "tstart": timer(E, K, "start"); break;
-    case "tstop": timer(E, K, "stop"); break;
+    case "tstop": timer(E, K, "stop").then(() => tellNext(E, K)); break;
     case "treset": timer(E, K, "reset"); break;
     case "start": setEventState(E, "live"); break;
     case "ask-close": ui.confirm = { e: E }; render(true); break;
@@ -652,6 +716,15 @@ document.addEventListener("click", e => {
     case "sample-do": ui.confirm = null; api("/api/sample", {}).then(() => { toast("Practice data loaded"); return poll(true); }).catch(er => toast(er.message, true)); break;
   }
 });
+function tellNext(eid, k) {
+  if (!PEOPLE[k]) return;
+  index(); const n = nextStop(k, eid);
+  toast(n ? `${k} is done. Next: ${short(n.ev.title)} at ${vName(n.ev.venue)}${n.es === "live" ? " (open now)" : " (not started yet)"}` : `${k} is done. No more events today.`);
+}
+/* hover tooltip for chart bars */
+document.addEventListener("mouseover", e => { const r = e.target.closest("[data-tip]"); const tip = $("#tip"); if (!tip) return;
+  if (!r || !r.dataset.tip) { tip.hidden = true; return; } tip.textContent = r.dataset.tip; tip.hidden = false;
+  const b = r.getBoundingClientRect(); tip.style.left = Math.min(window.innerWidth - tip.offsetWidth - 8, b.left + 24) + "px"; tip.style.top = (b.top - tip.offsetHeight - 6) + "px"; });
 document.addEventListener("keydown", e => { if (e.key === "Escape") { if (ui.person) { ui.person = null; renderSheet(); } else if (ui.navOpen) { ui.navOpen = false; render(true); } } });
 document.addEventListener("input", e => {
   const t = e.target;
