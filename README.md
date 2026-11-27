@@ -12,9 +12,11 @@ Keep the black window open the whole day. Closing it stops the website.
    (choose "Private networks").
 
 ## Sign-in codes (change them in Settings)
-| Code | Opens |
+**Admin code:** not stored in this repository. Set the `KALAMELA_ADMIN_CODE` environment
+variable before starting, or the first start creates a random one and prints it in the black window.
+
+| Venue code | Opens |
 |---|---|
-| ADMIN2026 | Admin: dashboard, all venues, Excel export, settings |
 | CHURCH1 | V1 – Inside the Church |
 | BALCONY2 | V2 – Balcony |
 | SSHALL3 | V3 – Sunday School Hall / Vestry |
@@ -33,7 +35,7 @@ The app also runs on a Python host (Render, Railway, a VPS).
 - Start: `python server.py` (it reads the `PORT` environment variable)
 - Set `KALAMELA_DB` to a path on a persistent disk, or attendance is lost when the host restarts.
 - Set `KALAMELA_ADMIN_CODE` to your own admin code, and change the venue codes in Settings
-  straight after the first sign-in. The default codes above are public in this repository.
+  straight after the first sign-in, because the default venue codes above are public.
 
 ## Updating the participant list
 `tools/build_data.py` rebuilds `data.json` from the schedule PDF and master sheet:

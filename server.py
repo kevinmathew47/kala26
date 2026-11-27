@@ -18,8 +18,18 @@ STATIC = os.path.join(HERE, "static")
 DB_PATH = os.environ.get("KALAMELA_DB", os.path.join(HERE, "kalamela.db"))
 DATA_PATH = os.path.join(HERE, "data.json")
 
-DEFAULT_CODES = {"admin": os.environ.get("KALAMELA_ADMIN_CODE", "ADMIN2026").upper(),
-                 "V1": "CHURCH1", "V2": "BALCONY2", "V3": "SSHALL3", "V4": "FHALL4"}
+# The admin code is never stored in this repository. It comes from the
+# KALAMELA_ADMIN_CODE environment variable, or a random one is created on first
+# run and printed in the server window (change it later in Settings).
+DEFAULT_CODES = {"V1": "CHURCH1", "V2": "BALCONY2", "V3": "SSHALL3", "V4": "FHALL4"}
+
+
+def first_admin_code():
+    env = os.environ.get("KALAMELA_ADMIN_CODE", "").strip().upper()
+    if len(env) >= 4:
+        return env
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    return "ADM-" + "".join(secrets.choice(alphabet) for _ in range(6))
 STATUSES = {"present", "done", "absent"}
 EVENT_STATES = {"upcoming", "live", "done"}
 
@@ -57,6 +67,7 @@ def init_db():
         """)
         for k, v in DEFAULT_CODES.items():
             CON.execute("INSERT OR IGNORE INTO config(key,value) VALUES(?,?)", ("code_" + k, v))
+        CON.execute("INSERT OR IGNORE INTO config(key,value) VALUES(?,?)", ("code_admin", first_admin_code()))
         CON.execute("INSERT OR IGNORE INTO config(key,value) VALUES('version','1')")
         CON.commit()
 
@@ -443,7 +454,7 @@ class Handler(BaseHTTPRequestHandler):
 
         if p == "/api/settings":
             new = b.get("codes") or {}
-            vals = {k: str(new.get(k, "")).strip().upper() for k in DEFAULT_CODES}
+            vals = {k: str(new.get(k, "")).strip().upper() for k in ("admin", *DEFAULT_CODES)}
             if any(len(v) < 4 for v in vals.values()):
                 return self.send_json({"error": "Each code needs at least 4 characters."}, 400)
             if len(set(vals.values())) != len(vals):
