@@ -444,3 +444,131 @@ tr.win.r1 td{background:#fefce8}tr.win.r2 td{background:#f9fafb}tr.win.r3 td{bac
 .next svg{margin-top:2px}
 .next span{min-width:0;line-height:1.6}
 .next .badge,.next .vbadge{vertical-align:1px}
+
+/* ================= v5: compact, phone-first ================= */
+:root{--side:224px;--top:54px}
+body{font-size:14px;background:#f1f3f6}
+.content{padding:14px 18px 24px;gap:12px}
+.topbar{padding:6px 18px;min-height:var(--top)}
+.topbar h1{font-size:17px}
+.side-brand{padding:12px 14px;min-height:var(--top)}
+.nav{padding:8px}
+.nav a{padding:7px 10px;font-size:13.5px}
+.card{border-radius:10px}
+.card-h{padding:10px 14px;min-height:44px}
+.card-h h2{font-size:14.5px}
+.card-b{padding:12px 14px}
+.grid-2,.grid-3{gap:12px}
+.t th{padding:8px 12px}
+.t td{padding:8px 12px}
+.t.dense td{padding:6px 12px}
+.table-wrap.tall{max-height:520px;overflow:auto}
+.table-wrap.tall thead th{position:sticky;top:0;z-index:1}
+.empty{padding:20px 14px}
+.empty.sm{padding:14px;font-size:13px}
+
+/* stats: one tight row */
+.stats{gap:10px}
+.stats.six{grid-template-columns:repeat(6,minmax(0,1fr))}
+.stat{padding:10px 12px;gap:2px}
+.stat .val{font-size:22px}
+.stat .lbl{font-size:12px}
+.stat .foot{font-size:11.5px}
+@media (max-width:1200px){.stats.six{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media (max-width:640px){.stats.six{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+/* dashboard: main + side column */
+.dash{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:12px;align-items:start}
+.dash-main,.dash-side{display:grid;gap:12px;min-width:0}
+.dash-side{position:sticky;top:calc(var(--top) + 12px)}
+@media (max-width:1150px){.dash{grid-template-columns:1fr}.dash-side{position:static}}
+.list.scroll{max-height:300px;overflow:auto}
+.li{padding:9px 14px}
+.li[data-act]{cursor:pointer}
+.li[data-act]:hover{background:var(--surface-2)}
+.card-h .status-key{margin:0;gap:4px 10px;font-size:11.5px}
+.vrows{display:grid}
+.vrow{display:grid;grid-template-columns:260px minmax(0,1fr);gap:10px;padding:10px 14px;border-bottom:1px solid var(--line);box-shadow:inset 3px 0 0 var(--vc);align-items:start}
+.vrow:last-child{border-bottom:0}
+.vrow-h{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13.5px;padding-top:4px}
+.vrow-h .grow{flex:1}
+.vrow-b{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:8px}
+.vrow .idle{font-size:13px;padding-top:4px}
+.now-ev{padding:8px 10px;gap:5px;background:var(--surface)}
+.now-ev .t{font-size:13px}
+.now-ev .bar{height:6px}
+@media (max-width:900px){.vrow{grid-template-columns:1fr}}
+
+/* trophy + awards */
+.trophy,.award{padding:14px 16px;display:grid;gap:4px}
+.trophy{background:linear-gradient(135deg,var(--surface) 50%,#fee2e2)}
+.trophy.won{background:linear-gradient(135deg,#fff 40%,#fecaca);border-color:#f87171}
+.trophy .aw-t{color:var(--primary)}
+.aw-n{font-size:19px;line-height:1.25}
+.podium{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:6px;font-size:13px}
+.podium>span{display:inline-flex;align-items:center;gap:6px}
+.podium .medal{width:20px;height:20px;font-size:11px}
+.awards{grid-template-columns:repeat(3,minmax(0,1fr))}
+@media (max-width:1000px){.awards{grid-template-columns:1fr}}
+
+/* desk density */
+.desk{grid-template-columns:280px minmax(0,1fr);gap:12px}
+.ev-list{gap:10px;top:calc(var(--top) + 12px);max-height:calc(100vh - var(--top) - 24px);overflow:auto;padding-right:2px}
+.ev-item{padding:8px 10px}
+.ev-item .nm{font-size:13px}
+.sheet-head{padding:12px 14px}
+.sheet-head h2{font-size:18px}
+.sheet-prog{padding:0 14px 10px}
+.tabs-in{padding:0 14px}
+.afilter{padding:10px 14px}
+.entry{padding:10px 14px;gap:10px}
+.livebar{padding:10px 12px;gap:8px}
+.lb-item{flex-basis:200px;padding:8px 10px}
+.fix-acts{display:flex;gap:6px;flex-wrap:wrap}
+.fixnote{display:flex;gap:8px;align-items:center;margin:0 14px 10px;padding:8px 12px;border-radius:8px;background:var(--blue-bg);color:#1e3a8a;font-size:13px}
+.fixnote svg{width:16px;height:16px;flex:none}
+.toggle{display:inline-flex;border:1px solid var(--line-2);border-radius:8px;overflow:hidden}
+.toggle button{border:0;background:var(--surface);padding:7px 12px;font-size:13px;font-weight:600;color:var(--muted);min-height:34px}
+.toggle button+button{border-left:1px solid var(--line-2)}
+.toggle button.on.ok{background:var(--blue);color:#fff}
+.toggle button.on.bad{background:var(--red);color:#fff}
+
+/* live now page */
+.lead-in{margin:0}
+.live-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
+.live-card{padding:12px 14px;display:grid;gap:8px;border-top:4px solid var(--vc)}
+.lc-h{display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:600;color:var(--muted)}
+.lc-h .badge{margin-left:auto}
+.lc-t{font-size:15px}
+.lc-n{display:flex;gap:14px;font-size:12.5px;color:var(--muted)}
+.lc-n b{color:var(--ink)}
+
+/* bottom tab bar on phones */
+.tabbar{display:none}
+@media (max-width:1023px){
+  .tabbar{display:flex;position:fixed;left:0;right:0;bottom:0;z-index:28;background:var(--surface);border-top:1px solid var(--line);padding:4px max(6px,env(safe-area-inset-left,0px)) calc(4px + env(safe-area-inset-bottom,0px));box-shadow:0 -4px 16px rgba(16,24,40,.06)}
+  .tabbar a,.tabbar button{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;padding:6px 2px;border:0;background:none;color:var(--muted);text-decoration:none;font-size:11px;font-weight:600;border-radius:8px;min-height:50px;justify-content:center}
+  .tabbar svg{width:21px;height:21px}
+  .tabbar a.on{color:var(--primary);background:var(--primary-soft)}
+  .content{padding:12px 12px calc(84px + env(safe-area-inset-bottom,0px))}
+  .menu-btn{display:none}
+  .topbar{padding:6px 14px}
+  .toast{bottom:calc(76px + env(safe-area-inset-bottom,0px))}
+  .desk{grid-template-columns:1fr}
+}
+@media (max-width:767px){
+  body{font-size:15px}
+  .topbar h1{font-size:16px}
+  .desk-live,.content>.livebar{display:none}
+  .sheet-head{padding:12px}
+  .sheet-head .btn.big{width:100%}
+  .fix-acts{width:100%}.fix-acts .btn{flex:1}
+  .entry{padding:12px}
+  .entry .nm{font-size:15.5px}
+  .entry .acts .btn{min-height:46px;font-size:15px}
+  .toggle{width:100%}.toggle button{flex:1;min-height:44px}
+  .afilter{padding:10px 12px}
+  .afilter button{padding:8px 12px}
+  .stat .val{font-size:20px}
+  .card-h{padding:10px 12px}
+}

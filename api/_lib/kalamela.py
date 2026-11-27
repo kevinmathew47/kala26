@@ -991,6 +991,16 @@ class Handler(BaseHTTPRequestHandler):
             t.bump()
             return self.json({"ok": True})
 
+        if p == "/api/event-reset":  # admin: clear one event's attendance and timers, back to Not started
+            eid = b.get("e")
+            if eid not in evs:
+                return self.json({"error": "Unknown event."}, 400)
+            for tbl, col in (("kl_attendance", "eid"), ("kl_timer", "eid"), ("kl_event_state", "id")):
+                t.run(f"DELETE FROM {tbl} WHERE {col}=?", (eid,))
+            t.log(who, "Restarted attendance", eid)
+            t.bump()
+            return self.json({"ok": True})
+
         if p == "/api/reset":
             for tbl in ("kl_attendance", "kl_event_state", "kl_timer", "kl_sheet"):
                 t.run(f"DELETE FROM {tbl}")

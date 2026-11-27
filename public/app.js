@@ -191,6 +191,17 @@ function hbars(rows, opts = {}) {
     ${opts.threshold ? `<div class="hb-note"><span class="hb-th-key"></span>${opts.threshold} points needed for the award</div>` : ""}`;
 }
 
+function trophyCard(ch, compact) {
+  const c = ch.churches, first = c.filter(x => x.rank === 1), second = c.filter(x => x.rank === 2), third = c.filter(x => x.rank === 3);
+  const nm = x => esc(x.k.replace("Mar Thoma Church", "MTC"));
+  return `<div class="card trophy ${first.length ? "won" : ""}">
+    <div class="aw-t">${icon("trophy")}Overall trophy</div>
+    <div class="aw-n">${first.length ? first.map(nm).join(" &amp; ") : "Not decided yet"}</div>
+    <div class="aw-f">${first.length ? `${first[0].v} points · champion church` : "The church with the most points wins"}</div>
+    ${!compact && (second.length || third.length) ? `<div class="podium">${second.length ? `<span><span class="medal m2">2</span>${second.map(nm).join(", ")} <b>${second[0].v}</b></span>` : ""}${third.length ? `<span><span class="medal m3">3</span>${third.map(nm).join(", ")} <b>${third[0].v}</b></span>` : ""}</div>` : ""}
+  </div>`;
+}
+
 /* ================= actions ================= */
 async function act(path, body, optimistic, okMsg) {
   const snap = JSON.stringify({ att: S.att, est: S.est, tmr: S.tmr });
@@ -265,7 +276,8 @@ function overList() {
 
 /* ================= routing ================= */
 const ADMIN_ROUTES = [["dashboard", "Dashboard", "dash"], ["venues", "Venue desks", "pin"], ["participants", "Participants", "users"], ["results", "Results & rankings", "trophy"], ["events", "Events", "cal"], ["reports", "Export", "file"], ["settings", "Settings", "gear"]];
-const VOL_ROUTES = [["desk", "My venue", "pin"], ["find", "Find participant", "search"]];
+const VOL_ROUTES = [["desk", "My venue", "pin"], ["live", "Live now", "bell"], ["find", "Find", "search"]];
+const ADMIN_TABS = ["dashboard", "venues", "participants", "results"];
 const routes = () => isAdmin() ? ADMIN_ROUTES : VOL_ROUTES;
 function currentRoute() { const h = location.hash.slice(1); return routes().some(x => x[0] === h) ? h : routes()[0][0]; }
 window.addEventListener("hashchange", () => { ui.navOpen = false; ui.confirm = null; render(true); window.scrollTo(0, 0); });
@@ -299,13 +311,17 @@ function render(force) {
     <div class="main">
       <header class="topbar">
         <button class="btn ghost sm menu-btn" data-act="nav-open" aria-label="Open menu">${icon("menu")}</button>
-        <h1>${esc(title)}</h1><div class="grow"></div>
+        <h1>${esc(isAdmin() ? title : (route === "desk" ? vName(ME.venue) : title))}</h1><div class="grow"></div>
         <span class="live ${ONLINE ? "" : "off"}" id="live"><i></i><span>${ONLINE ? "Live" : "Reconnecting…"}</span></span>
         <span class="clock hide-sm" id="clock">${clock()}</span>
         ${isAdmin() ? `<a class="btn primary sm" href="/api/export.xlsx" download>${icon("down")}<span class="hide-sm">Export Excel</span></a>` : ""}
       </header>
       <main class="content" id="view">${view(route)}</main>
     </div>
+    <nav class="tabbar" aria-label="Quick navigation">
+      ${routes().filter(([k]) => !isAdmin() || ADMIN_TABS.includes(k)).map(([k, l, ic]) => `<a href="#${k}" class="${k === route ? "on" : ""}">${icon(ic)}<span>${l.replace("Venue desks", "Desks").replace("Results & rankings", "Results")}</span></a>`).join("")}
+      ${isAdmin() ? `<button data-act="nav-open">${icon("menu")}<span>More</span></button>` : `<button data-act="logout">${icon("out")}<span>Sign out</span></button>`}
+    </nav>
   </div>`;
   if (keep) { const el = document.getElementById(keep.id); if (el) { el.focus(); try { el.setSelectionRange(keep.pos, keep.pos); } catch (e) {} } }
   window.scrollTo(0, sy);
@@ -322,6 +338,7 @@ function view(r) {
     case "settings": return vSettings();
     case "desk": return vDesk(ME.venue);
     case "find": return vFind();
+    case "live": return vLive();
   }
   return "";
 }
@@ -369,12 +386,9 @@ function vDashboard() {
   const venues = S.venues.map(v => {
     const evs = IDX.evs.filter(e => e.venue === v.code), live = evs.filter(e => stateOf(e.id) === "live"), d = evs.filter(e => stateOf(e.id) === "done").length;
     const marksDue = evs.filter(e => stateOf(e.id) === "done" && markedCount(e) < e.entries.length - counts(e).absent).length;
-    return `<div class="card venue" style="--vc:${vcolor(v.code)}">
-      <div class="card-h">${vbadge(v.code)}<h2>${esc(v.name)}</h2><span class="grow"></span><span class="sub">${d}/${evs.length} finished</span></div>
-      <div class="card-b">
-        ${live.length ? live.map(e => { const c = counts(e); return `<button class="now-ev" data-act="open-ev" data-e="${e.id}"><span class="t">${esc(short(e.title))}</span>${progressBar(c, e.entries.length)}<span class="nums"><span>${c.waiting} to come</span><span>${c.running} timing</span><span>${c.done} done</span>${c.absent ? `<span class="r">${c.absent} absent</span>` : ""}</span></button>`; }).join("") : `<div class="muted">No event open.</div>`}
-        ${marksDue ? `<div class="kv-row"><span class="muted">Marks to enter</span><span>${marksDue} finished event${marksDue > 1 ? "s" : ""}</span></div>` : ""}
-      </div></div>`;
+    return `<div class="vrow" style="--vc:${vcolor(v.code)}">
+      <div class="vrow-h">${vbadge(v.code)}<b>${esc(v.name)}</b><span class="grow"></span><span class="sub">${d}/${evs.length} finished${marksDue ? ` · <span class="amber-t">${marksDue} need marks</span>` : ""}</span></div>
+      <div class="vrow-b">${live.length ? live.map(e => { const c = counts(e); return `<button class="now-ev" data-act="open-ev" data-e="${e.id}"><span class="t">${esc(short(e.title))}</span>${progressBar(c, e.entries.length)}<span class="nums"><span>${c.waiting} to come</span><span>${c.running} timing</span><span>${c.done} done</span>${c.absent ? `<span class="r">${c.absent} absent</span>` : ""}</span></button>`; }).join("") : `<span class="muted idle">No event open</span>`}</div></div>`;
   }).join("");
   // participants wanted at a live event who haven't come
   const wanted = [];
@@ -389,23 +403,29 @@ function vDashboard() {
   wanted.sort((a, b) => b.red - a.red);
   const overHTML = over.map(o => { const en = o.ev.entries.find(x => keyOf(x) === o.k);
     return `<div class="li red"><span class="sev"></span><div style="min-width:0"><div class="t">${esc(o.k)} · ${esc(nameOf(en))}</div><div class="d">${vbadge(o.ev.venue)} ${esc(short(o.ev.title))} · limit ${fmtMin(o.ev.timer)}</div></div><span class="badge red">+${mmss(o.over)}</span></div>`; }).join("");
+  const ch = championship();
   return `
-    <div class="stats">${stats}</div>
-    <div class="venue-grid">${venues}</div>
-    <div class="status-key"><span><i style="background:var(--line-2)"></i>To come</span><span><i style="background:var(--green)"></i>Here</span><span><i style="background:var(--amber)"></i>Timing</span><span><i style="background:var(--blue)"></i>Done</span><span><i style="background:var(--red)"></i>Absent</span></div>
-    <div class="grid-2">
-      <div class="card"><div class="card-h"><h2>${icon("bell")} Over time now</h2><span class="grow"></span>${over.length ? badge("over", over.length + " over") : ""}</div>
-        <div class="list">${overHTML || `<div class="empty">Nobody is over their time limit.</div>`}</div></div>
-      <div class="card"><div class="card-h"><h2>Not arrived at events in progress</h2><span class="grow"></span>${wanted.length ? badge("called", wanted.length + " pending") : ""}</div>
-        <div class="list">${wanted.slice(0, 60).map(a => `<div class="li ${a.red ? "red" : ""}"><span class="sev"></span><div style="min-width:0"><div class="t">${esc(a.t)}</div><div class="d">${esc(a.d)}</div></div><button class="btn sm" data-act="person" data-c="${a.c}">View</button></div>`).join("") || `<div class="empty">Everyone needed at the events in progress has arrived.</div>`}</div></div>
-    </div>
-    <div class="card"><div class="card-h"><h2>All events</h2><span class="sub">${liveN} in progress · ${doneN} finished · ${es.length - liveN - doneN} not started</span></div>
-      <div class="table-wrap"><table class="t cards"><thead><tr><th>Event</th><th>Venue</th><th>Status</th><th>Arrived</th><th>In progress</th><th>Completed</th><th>Absent</th><th>Marks</th></tr></thead><tbody>
-      ${IDX.evs.map(e => { const c = counts(e), st = stateOf(e.id), mc = markedCount(e), need = e.entries.length - c.absent;
-        return `<tr class="click" data-act="open-ev" data-e="${e.id}"><td class="lead" data-l="Event"><b>${esc(short(e.title))}</b></td><td data-l="Venue">${vbadge(e.venue)}</td><td data-l="Status">${badge(evLabel(e.id))}</td>
-        <td data-l="Arrived" class="num">${c.present + c.running + c.done}/${e.entries.length}</td><td data-l="In progress" class="num">${c.running || ""}</td><td data-l="Completed" class="num">${c.done}</td><td data-l="Absent" class="num">${c.absent || ""}</td>
-        <td data-l="Marks">${st === "done" ? (mc >= need ? badge("done", "Entered") : badge("called", `${mc}/${need}`)) : '<span class="muted">–</span>'}</td></tr>`; }).join("")}
-      </tbody></table></div></div>`;
+    <div class="stats six">${stats}</div>
+    <div class="dash">
+      <div class="dash-main">
+        <div class="card"><div class="card-h"><h2>${icon("pin")} Venues</h2><span class="grow"></span><div class="status-key"><span><i style="background:var(--line-2)"></i>To come</span><span><i style="background:var(--green)"></i>Here</span><span><i style="background:var(--amber)"></i>Timing</span><span><i style="background:var(--blue)"></i>Done</span><span><i style="background:var(--red)"></i>Absent</span></div></div>
+          <div class="vrows">${venues}</div></div>
+        <div class="card"><div class="card-h"><h2>All events</h2><span class="sub">${liveN} open · ${doneN} finished · ${es.length - liveN - doneN} not started</span></div>
+          <div class="table-wrap tall"><table class="t cards dense"><thead><tr><th>Event</th><th>Venue</th><th>Status</th><th>Arrived</th><th>Timing</th><th>Done</th><th>Absent</th><th>Marks</th></tr></thead><tbody>
+          ${IDX.evs.map(e => { const c = counts(e), st = stateOf(e.id), mc = markedCount(e), need = e.entries.length - c.absent;
+            return `<tr class="click" data-act="open-ev" data-e="${e.id}"><td class="lead" data-l="Event"><b>${esc(short(e.title))}</b></td><td data-l="Venue">${vbadge(e.venue)}</td><td data-l="Status">${badge(evLabel(e.id))}</td>
+            <td data-l="Arrived" class="num">${c.present + c.running + c.done}/${e.entries.length}</td><td data-l="Timing" class="num">${c.running || ""}</td><td data-l="Done" class="num">${c.done || ""}</td><td data-l="Absent" class="num">${c.absent || ""}</td>
+            <td data-l="Marks">${st === "done" ? (mc >= need ? badge("done", "Entered") : badge("called", `${mc}/${need}`)) : '<span class="muted">–</span>'}</td></tr>`; }).join("")}
+          </tbody></table></div></div>
+      </div>
+      <aside class="dash-side">
+        ${trophyCard(ch, true)}
+        <div class="card"><div class="card-h"><h2>${icon("bell")} Over time</h2><span class="grow"></span>${over.length ? badge("over", over.length) : ""}</div>
+          <div class="list scroll">${overHTML || `<div class="empty sm">Nobody is over time.</div>`}</div></div>
+        <div class="card"><div class="card-h"><h2>Not arrived</h2><span class="grow"></span>${wanted.length ? badge("called", wanted.length) : ""}</div>
+          <div class="list scroll">${wanted.slice(0, 80).map(a => `<div class="li ${a.red ? "red" : ""}" data-act="person" data-c="${a.c}" role="button" tabindex="0"><span class="sev"></span><div style="min-width:0"><div class="t">${esc(a.t)}</div><div class="d">${esc(a.d)}</div></div></div>`).join("") || `<div class="empty sm">Everyone needed at open events has arrived.</div>`}</div></div>
+      </aside>
+    </div>`;
 }
 function progress(c, total) {
   const p = x => total ? x / total * 100 : 0, arr = c.present + c.running;
@@ -433,7 +453,8 @@ function callSheet(ev) {
   let ctl = "";
   if (st === "upcoming") ctl = `<button class="btn success big" data-act="start" data-e="${ev.id}">${icon("play")}Start event</button>`;
   else if (st === "live") ctl = `<button class="btn danger big" data-act="ask-close" data-e="${ev.id}">${icon("flag")}Event finished</button>`;
-  else if (admin) ctl = `<button class="btn" data-act="reopen" data-e="${ev.id}">Reopen</button>`;
+  else if (admin) ctl = `<div class="fix-acts"><button class="btn" data-act="reopen" data-e="${ev.id}" title="The venue volunteer can mark attendance again, then press Event finished">Reopen for corrections</button><button class="btn ghost" data-act="ask-restart" data-e="${ev.id}">Restart attendance</button></div>`;
+  const restart = ui.confirm && ui.confirm.restart === ev.id ? `<div class="confirm"><span>Clear all attendance and timers for <b>${esc(short(ev.title))}</b> and set it back to Not started? Judges' marks already entered are kept.</span><button class="btn sm" data-act="cancel">Cancel</button><button class="btn sm danger" data-act="restart" data-e="${ev.id}">Clear and restart</button></div>` : "";
   const conf = ui.confirm && ui.confirm.e === ev.id ? `<div class="confirm"><span>Finish <b>${esc(short(ev.title))}</b>? ${c.waiting ? `<b>${c.waiting}</b> not arrived will be recorded as absent. ` : ""}${c.running ? `<b>${c.running}</b> running timer(s) will stop. ` : ""}Then enter the judges' marks.</span><button class="btn sm" data-act="cancel">Not yet</button><button class="btn sm danger" data-act="close" data-e="${ev.id}">Finish event</button></div>` : "";
   const f = (ui.af || {})[ev.id] || "all";
   const FILT = [["all", "All", ev.entries.length, ""], ["waiting", "To come", c.waiting, "var(--line-2)"], ["here", "Here", c.present, "var(--green)"], ["running", "Timing", c.running, "var(--amber)"], ["done", "Done", c.done, "var(--blue)"], ["absent", "Absent", c.absent, "var(--red)"]];
@@ -441,7 +462,8 @@ function callSheet(ev) {
   return `<div class="card sheet" style="--vc:${vcolor(ev.venue)}">
     <div class="sheet-head"><div class="grow"><div class="eyebrow">${vbadge(ev.venue)} ${esc(vName(ev.venue))} ${badge(evLabel(ev.id))}</div><h2>${esc(short(ev.title))}</h2>
       <div class="meta">${ev.entries.length} ${ev.type === "group" ? "teams" : "participants"}${ev.timer ? ` · ${icon("timer")} ${timerText(ev)}` : ""} · ${ev.judges} judge${ev.judges > 1 ? "s" : ""}</div></div>${ctl}</div>
-    ${conf}
+    ${conf}${restart}
+    ${st === "done" && admin && tab !== "marks" ? `<div class="fixnote">${icon("gear")}<span>Admin correction: use <b>Completed / Absent</b> on any row to fix a mistake. The results update straight away.</span></div>` : ""}
     <div class="sheet-prog">${progressBar(c, ev.entries.length)}</div>
     <div class="tabs-in"><button class="${tab === "people" ? "on" : ""}" data-act="tab" data-e="${ev.id}" data-t="people">Attendance</button><button class="${tab === "marks" ? "on" : ""}" data-act="tab" data-e="${ev.id}" data-t="marks">Judges' marks${st === "done" ? ` <span class="c">${markedCount(ev)}/${ev.entries.length - c.absent}</span>` : ""}</button></div>
     ${tab === "marks" ? marksPanel(ev) : `<div class="afilter" role="tablist">${FILT.filter(x => x[0] === "all" || x[2] || f === x[0]).map(([k, l, n, col]) => `<button class="${f === k ? "on" : ""}" data-act="af" data-e="${ev.id}" data-f="${k}" role="tab" aria-selected="${f === k}">${col ? `<i style="background:${col}"></i>` : ""}${l}<span>${n}</span></button>`).join("")}</div>
@@ -477,7 +499,9 @@ function entryRow(ev, en) {
   const tw = t && t.s ? `<div class="timer ${t.e ? "stopped" : ""}" data-tmr="${ev.id}|${esc(k)}"><span class="tv">0:00</span>${ev.timer ? `<span class="tb"><i></i></span>` : ""}<span class="tn"></span></div>` : "";
   const b = (cls, lab, a, extra = "") => `<button class="btn sm ${cls}" data-act="${a}" data-e="${ev.id}" data-k="${esc(k)}" ${extra}>${lab}</button>`;
   let acts = "";
-  if (!locked) {
+  if (closed && isAdmin()) {
+    acts = `<div class="toggle" role="group" aria-label="Correct attendance"><button class="${s === "done" ? "on ok" : ""}" data-act="mark" data-e="${ev.id}" data-k="${esc(k)}" data-s="done">Completed</button><button class="${s === "absent" ? "on bad" : ""}" data-act="mark" data-e="${ev.id}" data-k="${esc(k)}" data-s="absent">Absent</button></div>`;
+  } else if (!locked) {
     if (s === "waiting") acts = b("success", "Present", "mark", 'data-s="present"') + b("", "Absent", "mark", 'data-s="absent"');
     else if (s === "present") acts = (ev.timer ? b("primary", icon("timer") + "Start timer", "tstart") : b("primary", ev.type === "writing" ? "Submitted" : "Performed", "mark", 'data-s="done"')) + b("ghost", "Undo", "mark", 'data-s=""');
     else if (s === "running") acts = b("primary", ev.type === "writing" ? "Submitted" : "Finished", "tstop") + b("ghost", "Restart", "treset");
@@ -488,7 +512,7 @@ function entryRow(ev, en) {
   return `<div class="entry ${s === "done" || s === "absent" ? "dim" : ""} ${s === "running" ? "running" : ""}"><span class="ord">${en.order}</span>
     <span class="chest">${esc(k)}</span>
     <div class="info" style="min-width:0">${who}${where}</div>
-    <div class="acts">${s === "running" ? tw : doneNote || badge(s)}${acts}</div></div>`;
+    <div class="acts">${s === "running" ? tw : closed && isAdmin() ? doneNote : doneNote || badge(s)}${acts}</div></div>`;
 }
 
 /* ---------- judges' marks ---------- */
@@ -540,6 +564,19 @@ function pTable() {
   </tbody></table>`;
 }
 
+/* ---------- live now (volunteer) ---------- */
+function vLive() {
+  const live = IDX.evs.filter(e => stateOf(e.id) === "live");
+  if (!live.length) return `<div class="card empty">${icon("bell")}<br>No event is open right now. Events appear here the moment a venue presses <b>Start event</b>.</div>`;
+  return `<p class="muted lead-in">Events open now at every venue. Send waiting participants to these.</p>
+  <div class="live-cards">${live.map(e => { const c = counts(e), waiting = e.entries.filter(en => entryStatus(e, keyOf(en)) === "waiting");
+    return `<div class="card live-card" style="--vc:${vcolor(e.venue)}"><div class="lc-h">${vbadge(e.venue)}<span>${esc(vName(e.venue))}</span>${badge("live", "Open")}</div>
+      <b class="lc-t">${esc(short(e.title))}</b>${progressBar(c, e.entries.length)}
+      <div class="lc-n"><span><b>${c.waiting}</b> to come</span><span><b>${c.present + c.running}</b> here</span><span><b>${c.done}</b> done</span></div>
+      ${waiting.length ? `<div class="chips">${waiting.map(en => `<button class="chip" data-act="person" data-c="${esc(en.chest || en.members[0])}"><b>${esc(keyOf(en))}</b> ${esc(en.team ? teamParish(en) : (PEOPLE[en.chest] || {}).name)}</button>`).join("")}</div>` : `<div class="muted">Everyone has arrived.</div>`}
+    </div>`; }).join("")}</div>`;
+}
+
 /* ---------- find (volunteer) ---------- */
 function vFind() {
   return `${liveStrip()}<div class="toolbar"><div class="search">${icon("search")}<input class="input" id="findq" placeholder="Type a chest number or name" value="${esc(ui.findQ)}" aria-label="Find a participant"></div></div>
@@ -568,7 +605,7 @@ function vResults() {
   const churches = ch.churches.map(x => ({ rank: x.rank, label: x.k.replace("Mar Thoma Church", "MTC"), v: x.v, tip: `${x.k}: ${x.v} points` }));
   const stat = (cls, lbl, val, foot) => `<div class="card stat ${cls}"><span class="lbl">${lbl}</span><span class="val">${val}</span><span class="foot">${foot}</span></div>`;
   return `
-  <div class="grid-2">${award(ch.male, "Kalaprathibha")}${award(ch.female, "Kalathilakam")}</div>
+  <div class="grid-3 awards">${trophyCard(ch)}${award(ch.male, "Kalaprathibha")}${award(ch.female, "Kalathilakam")}</div>
   <div class="stats four">
     ${stat("blue", "Events finished", `${done.length}<small> / ${ch.per.length}</small>`, "Pressed Event finished")}
     ${stat("green", "Results complete", `${complete}<small> / ${done.length || 0}</small>`, "All judges' marks entered")}
@@ -709,6 +746,8 @@ document.addEventListener("click", e => {
     case "close": ui.confirm = null; setEventState(E, "done"); break;
     case "reopen": setEventState(E, "live"); break;
     case "reset-ask": ui.confirm = { reset: true }; render(true); break;
+    case "ask-restart": ui.confirm = { restart: E }; render(true); break;
+    case "restart": ui.confirm = null; api("/api/event-reset", { e: E }).then(() => { toast("Attendance cleared. The event is back to Not started."); ui.tab[E] = "people"; return poll(true); }).catch(er => toast(er.message, true)); break;
     case "sample-ask": ui.confirm = { sample: true }; render(true); break;
     case "venue-del-ask": ui.confirm = { delVenue: t.dataset.v }; render(true); break;
     case "venue-del-do": ui.confirm = null; api("/api/venue-delete", { code: t.dataset.v }).then(() => { toast("Venue removed"); SET = null; return poll(true); }).then(() => render(true)).catch(er => { toast(er.message, true); render(true); }); break;
