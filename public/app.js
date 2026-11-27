@@ -55,7 +55,8 @@ document.addEventListener("pointerdown", () => { try { AC = AC || new (window.Au
 
 /* ================= state ================= */
 let ME = null, BOOT = null, ONLINE = true, OFFSET = 0;
-const S = { version: 0, venues: [], evo: {}, cfg: {}, est: {}, att: {}, tmr: {}, sheets: {}, points: { ind: [5, 3, 1], grp: [10, 6, 2] } };
+const S = { version: 0, venues: [], evo: {}, cfg: {}, est: {}, att: {}, tmr: {}, sheets: {}, points: { ind: [5, 3, 1], grp: [15, 10, 5] } };
+const MIN_PCT = 50, AWARD_MIN = 13;  // Kalamela Manual 2026: rules 8 and 6
 const ui = { venue: "V1", sel: null, q: "", filter: "all", person: null, confirm: null, navOpen: false, findQ: "", tab: {}, judge: {} };
 let VMAP = {}, PEOPLE = {};
 const DRAFT = {};          // eid -> unsaved marks
@@ -123,8 +124,11 @@ function results(ev) {
     if (totals.every(x => x === null)) continue;
     rows.push({ k, en, totals, total: totals.reduce((a, b) => a + (b || 0), 0) });
   }
-  rows.sort((a, b) => b.total - a.total);
-  rows.forEach((r, i) => r.rank = i && r.total === rows[i - 1].total ? rows[i - 1].rank : i + 1);
+  const maxTot = ev.criteria.reduce((a, c) => a + (c.max || 0), 0) * ev.judges;
+  rows.forEach(r => { r.pct = maxTot ? Math.round(r.total / maxTot * 1000) / 10 : null; r.eligible = r.pct === null || r.pct >= MIN_PCT; });
+  rows.sort((a, b) => (a.eligible === b.eligible ? b.total - a.total : a.eligible ? -1 : 1));
+  let prev = null;
+  rows.forEach((r, i) => { if (!r.eligible) { r.rank = null; return; } r.rank = prev && r.total === prev.total ? prev.rank : i + 1; prev = r; });
   return rows;
 }
 function markedCount(ev) { const sh = sheetOf(ev); let n = 0; for (const en of ev.entries) { const k = keyOf(en); if (entryStatus(ev, k) === "absent") continue; const m = sh[k] || []; let full = true; for (let j = 0; j < ev.judges; j++) for (let c = 0; c < ev.criteria.length; c++) if (typeof (m[j] || [])[c] !== "number") full = false; if (full) n++; } return n; }
@@ -132,7 +136,7 @@ function championship() {
   const ind = {}, church = {}, per = [];
   for (const ev of IDX.evs) {
     const res = results(ev), pts = ev.type === "group" ? S.points.grp : S.points.ind, win = [];
-    for (const r of res) { if (r.rank > 3) continue; const p = pts[r.rank - 1] || 0; const parish = r.en.team ? teamParish(r.en) : (PEOPLE[r.k] || {}).parish;
+    for (const r of res) { if (!r.rank || r.rank > 3) continue; const p = pts[r.rank - 1] || 0; const parish = r.en.team ? teamParish(r.en) : (PEOPLE[r.k] || {}).parish;
       church[parish] = (church[parish] || 0) + p;
       if (!r.en.team) { const d = ind[r.k] ||= { points: 0, r: [0, 0, 0] }; d.points += p; d.r[r.rank - 1]++; }
       win.push({ ...r, p }); }
@@ -444,15 +448,15 @@ function marksPanel(ev) {
     <span class="muted save-state" id="save-${ev.id}">${DRAFT[ev.id] ? "Saving…" : "All marks saved"}</span></div>`;
   if (!ents.length) return head + `<div class="empty">Nobody took part, so there is nothing to mark.</div>`;
   if (j === J) {
-    return head + `<div class="table-wrap"><table class="t marks"><thead><tr><th>Rank</th><th>Chest / Team</th><th>Name</th>${Array.from({ length: J }, (_, i) => `<th class="num">Judge ${i + 1}</th>`).join("")}<th class="num">Total</th></tr></thead><tbody>
-      ${res.map(r => `<tr class="${r.rank <= 3 ? "win r" + r.rank : ""}"><td>${r.rank <= 3 ? `<span class="medal m${r.rank}">${r.rank}</span>` : r.rank}</td><td><b>${esc(r.k)}</b></td><td>${esc(nameOf(r.en))}<div class="sub">${esc(r.en.team ? teamParish(r.en) : (PEOPLE[r.k] || {}).parish)}</div></td>${r.totals.map(x => `<td class="num">${x ?? "–"}</td>`).join("")}<td class="num"><b>${r.total}</b></td></tr>`).join("") || `<tr><td colspan="${J + 4}" class="empty">No marks entered yet.</td></tr>`}
-      </tbody></table></div>`;
+    return head + `<div class="table-wrap"><table class="t marks"><thead><tr><th>Rank</th><th>Chest / Team</th><th>Name</th>${Array.from({ length: J }, (_, i) => `<th class="num">Judge ${i + 1}</th>`).join("")}<th class="num">Total</th><th class="num">%</th></tr></thead><tbody>
+      ${res.map(r => `<tr class="${r.rank && r.rank <= 3 ? "win r" + r.rank : ""}"><td>${!r.rank ? badge("absent", "Below 50%") : r.rank <= 3 ? `<span class="medal m${r.rank}">${r.rank}</span>` : r.rank}</td><td><b>${esc(r.k)}</b></td><td>${esc(nameOf(r.en))}<div class="sub">${esc(r.en.team ? teamParish(r.en) : (PEOPLE[r.k] || {}).parish)}</div></td>${r.totals.map(x => `<td class="num">${x ?? "–"}</td>`).join("")}<td class="num"><b>${r.total}</b></td><td class="num">${r.pct ?? "–"}</td></tr>`).join("") || `<tr><td colspan="${J + 5}" class="empty">No marks entered yet.</td></tr>`}
+      </tbody></table></div><div class="card-b muted" style="font-size:12.5px">As per the Kalamela Manual, a participant needs at least ${MIN_PCT}% of the maximum marks to be placed and earn points. Points: ${S.points.ind.join(" / ")} for individual events, ${S.points.grp.join(" / ")} for group events.</div>`;
   }
   const crit = ev.criteria;
   return head + `<div class="table-wrap"><table class="t marks"><thead><tr><th>Chest / Team</th>${crit.map(c => `<th class="num" title="${esc(c.name)}">${esc(c.name)}${c.max ? `<span class="mx">max ${c.max}</span>` : ""}</th>`).join("")}<th class="num">Total</th></tr></thead><tbody>
     ${ents.map(en => { const k = keyOf(en), row = ((sh[k] || [])[j]) || [];
       const tot = row.filter(x => typeof x === "number").reduce((a, b) => a + b, 0);
-      return `<tr><td><b>${esc(k)}</b><div class="sub">${esc(en.team ? teamParish(en) : (PEOPLE[k] || {}).name || "")}</div></td>${crit.map((c, ci) => `<td class="num"><input class="input mark" type="number" inputmode="decimal" min="0" ${c.max ? `max="${c.max}"` : ""} step="0.5" value="${row[ci] ?? ""}" data-act="mark-in" data-e="${ev.id}" data-k="${esc(k)}" data-j="${j}" data-c="${ci}" ${canEdit ? "" : "disabled"} aria-label="${esc(k)} ${esc(c.name)} judge ${j + 1}"></td>`).join("")}<td class="num"><b id="tot-${ev.id}-${esc(k)}-${j}">${tot || ""}</b>${rk[k] && rk[k].rank <= 3 ? ` <span class="medal m${rk[k].rank}">${rk[k].rank}</span>` : ""}</td></tr>`; }).join("")}
+      return `<tr><td><b>${esc(k)}</b><div class="sub">${esc(en.team ? teamParish(en) : (PEOPLE[k] || {}).name || "")}</div></td>${crit.map((c, ci) => `<td class="num"><input class="input mark" type="number" inputmode="decimal" min="0" ${c.max ? `max="${c.max}"` : ""} step="0.5" value="${row[ci] ?? ""}" data-act="mark-in" data-e="${ev.id}" data-k="${esc(k)}" data-j="${j}" data-c="${ci}" ${canEdit ? "" : "disabled"} aria-label="${esc(k)} ${esc(c.name)} judge ${j + 1}"></td>`).join("")}<td class="num"><b id="tot-${ev.id}-${esc(k)}-${j}">${tot || ""}</b>${rk[k] && rk[k].rank && rk[k].rank <= 3 ? ` <span class="medal m${rk[k].rank}">${rk[k].rank}</span>` : ""}</td></tr>`; }).join("")}
     </tbody></table></div><div class="card-b muted" style="font-size:12.5px">Marks save automatically. Absent participants are left out. ${crit.some(c => !c.max) ? "Quiz: enter each round's score as the quiz master directs." : "Each criterion's maximum is shown under its name."}</div>`;
 }
 
@@ -502,9 +506,13 @@ function vResults() {
     ${list.slice(0, 10).map(x => { const p = PEOPLE[x.k] || {}; return `<tr class="${x.rank <= 3 ? "win r" + x.rank : ""} click" data-act="person" data-c="${x.k}"><td>${medal(x.rank)}</td><td><b>${esc(x.k)}</b> ${esc(p.name)}</td><td class="sub">${esc(p.parish)}</td><td class="num">${x.d.r[0] || ""}</td><td class="num">${x.d.r[1] || ""}</td><td class="num">${x.d.r[2] || ""}</td><td class="num"><b>${x.v}</b></td></tr>`; }).join("") || `<tr><td colspan="7" class="empty">No results yet.</td></tr>`}
     </tbody></table></div></div>`;
   const done = ch.per.filter(x => stateOf(x.ev.id) === "done");
+  const award = (list, title) => { const top = list.filter(x => x.rank === 1 && x.v >= AWARD_MIN);
+    return `<div class="card stat ${top.length ? "green" : ""}"><span class="lbl">${title}</span><span class="val" style="font-size:20px">${top.length ? top.map(x => `${esc(x.k)} ${esc((PEOPLE[x.k] || {}).name)}`).join("<br>") : "Not decided yet"}</span>
+      <span class="foot">${top.length ? `${top[0].v} points · ${esc((PEOPLE[top[0].k] || {}).parish)}` : `Needs at least ${AWARD_MIN} points from individual events${list[0] ? ` · leader has ${list[0].v}` : ""}`}</span></div>`; };
   return `
+  <div class="grid-2">${award(ch.male, "Kalaprathibha (top male)")}${award(ch.female, "Kalathilakam (top female)")}</div>
   <div class="card"><div class="card-b toolbar" style="justify-content:space-between">
-    <div><b>Points per place</b><div class="muted" style="font-size:12.5px">Used for the individual and church championships. Ties share the place and its points.</div></div>
+    <div><b>Points per place</b><div class="muted" style="font-size:12.5px">As per the Kalamela Manual: individual 5 / 3 / 1, group 15 / 10 / 5. Below 50% marks earns no place or points. Ties share the place and its points.</div></div>
     <form id="points-form" class="toolbar">
       <span class="muted">Individual</span>${[0, 1, 2].map(i => `<input class="input pts" id="pi${i}" type="number" min="0" step="0.5" value="${S.points.ind[i]}" aria-label="Individual ${i + 1} place points">`).join("")}
       <span class="muted">Group</span>${[0, 1, 2].map(i => `<input class="input pts" id="pg${i}" type="number" min="0" step="0.5" value="${S.points.grp[i]}" aria-label="Group ${i + 1} place points">`).join("")}

@@ -45,7 +45,9 @@ VENUE_DEFAULT_CODES = {"V1": "CHURCH1", "V2": "BALCONY2", "V3": "VESTRY3", "V4":
 STATUSES = {"present", "done", "absent"}
 EVENT_STATES = {"upcoming", "live", "done"}
 SESSION_HOURS = 48
-DEFAULT_POINTS = {"ind": [5, 3, 1], "grp": [10, 6, 2]}
+DEFAULT_POINTS = {"ind": [5, 3, 1], "grp": [15, 10, 5]}  # Kalamela Manual 2026, General Instructions 7
+MIN_PERCENT = 50     # Manual 8: below 50% marks earns no points or prize
+AWARD_MIN_POINTS = 13  # Manual 6: Kalaprathibha / Kalathilakam need at least 13 points
 
 # ------------------------------------------------------------------ seed data
 with open(os.path.join(LIB, "data.json"), encoding="utf-8") as f:
@@ -222,6 +224,16 @@ class Tx:
                         self.run(f"DELETE FROM {tbl} WHERE {col}=?", (r["x"],))
             self.run("INSERT INTO kl_config(name,val) VALUES('schema','2') ON CONFLICT(name) DO NOTHING")
             self.bump()
+        # points follow the manual; replace the earlier 10/6/2 group default if nobody changed it
+        if (self.one("SELECT val FROM kl_config WHERE name='schema'") or {}).get("val") == "2":
+            cur = self.one("SELECT val FROM kl_config WHERE name='points'")
+            try:
+                if cur and json.loads(cur["val"]).get("grp") in ([10, 6, 2], [10.0, 6.0, 2.0]):
+                    self.set_config("points", json.dumps(DEFAULT_POINTS))
+            except Exception:
+                pass
+            self.set_config("schema", "3")
+            self.bump()
 
     # helpers
     def config(self):
@@ -305,7 +317,8 @@ def merged_events(evo, cfg=None):
 
 # ------------------------------------------------------------------ results
 def event_results(ev, sheet, judges, status_of):
-    """Rows sorted by total; rank shared on ties (1,1,3). Only entries with marks are ranked."""
+    """Rows sorted by total; rank shared on ties (1,1,3). Only entries with marks are listed.
+    Manual rule 8: an entry below 50% of the maximum marks gets no rank (no points, no prize)."""
     rows = []
     for en in ev["entries"]:
         k = key_of(en)
@@ -320,9 +333,18 @@ def event_results(ev, sheet, judges, status_of):
         if all(x is None for x in totals):
             continue
         rows.append({"k": k, "judgeTotals": totals, "total": sum(x for x in totals if x is not None)})
-    rows.sort(key=lambda r: -r["total"])
+    maxtot = sum(c["max"] for c in ev["criteria"]) * judges
+    for r in rows:
+        r["pct"] = round(r["total"] / maxtot * 100, 1) if maxtot else None
+        r["eligible"] = r["pct"] is None or r["pct"] >= MIN_PERCENT
+    rows.sort(key=lambda r: (not r["eligible"], -r["total"]))
+    prev = None
     for i, r in enumerate(rows):
-        r["rank"] = rows[i - 1]["rank"] if i and r["total"] == rows[i - 1]["total"] else i + 1
+        if not r["eligible"]:
+            r["rank"] = None
+            continue
+        r["rank"] = prev["rank"] if prev and r["total"] == prev["total"] else i + 1
+        prev = r
     return rows
 
 
@@ -334,7 +356,7 @@ def championship(evs, sheets, status_fn, points, venue_name):
         pts = points["grp"] if ev["type"] == "group" else points["ind"]
         winners = []
         for r in res:
-            if r["rank"] > 3:
+            if r["rank"] is None or r["rank"] > 3:
                 continue
             p = pts[r["rank"] - 1] if r["rank"] - 1 < len(pts) else 0
             en = next(x for x in ev["entries"] if key_of(x) == r["k"])
@@ -502,6 +524,11 @@ def build_workbook(snap, acts, venue_name):
             name = PEOPLE.get(k, {}).get("name", "") if not en.get("team") else "Team " + k
             rrows.append([ev["title"], rank, k, name, en.get("parish") or PEOPLE.get(k, {}).get("parish", ""), total, pts])
     sheet(wb.create_sheet("Results"), ["Event", "Rank", "Chest / Team", "Name", "Parish", "Total marks", "Points"], rrows, [40, 7, 12, 28, 40, 12, 8])
+    ws_r = wb["Results"]
+    ws_r.append([])
+    ws_r.append(["Points as per the Kalamela Manual: individual 1st/2nd/3rd = %s, group = %s. Below 50%% marks earns no points or prize. "
+                 "Kalaprathibha / Kalathilakam need at least %d points from individual events." %
+                 ("/".join(f"{x:g}" for x in snap["points"]["ind"]), "/".join(f"{x:g}" for x in snap["points"]["grp"]), AWARD_MIN_POINTS)])
 
     def ranked(items):
         items = sorted(items, key=lambda x: -x[1])
@@ -511,10 +538,11 @@ def build_workbook(snap, acts, venue_name):
         return out
 
     chrows = []
-    for g in ("Male", "Female"):
+    for g, award in (("Male", "Kalaprathibha"), ("Female", "Kalathilakam")):
         for rank, k, v in ranked([(k, d["points"]) for k, d in ind.items() if PEOPLE.get(k, {}).get("gender") == g])[:10]:
             d = ind[k]
-            chrows.append([f"Individual – {g}", rank, k, PEOPLE[k]["name"], PEOPLE[k]["parish"], v, d["first"], d["second"], d["third"]])
+            label = f"{award} (winner)" if rank == 1 and v >= AWARD_MIN_POINTS else f"Individual – {g}"
+            chrows.append([label, rank, k, PEOPLE[k]["name"], PEOPLE[k]["parish"], v, d["first"], d["second"], d["third"]])
     for rank, k, v in ranked(list(church.items())):
         chrows.append(["Church", rank, "", "", k, v, "", "", ""])
     sheet(wb.create_sheet("Championship"), ["Category", "Rank", "Chest No", "Name", "Parish", "Points", "1st places", "2nd places", "3rd places"],
