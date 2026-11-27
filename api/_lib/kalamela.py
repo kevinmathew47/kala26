@@ -439,14 +439,9 @@ def fmt_dur(ms):
 
 
 def build_workbook(snap, acts, venue_name):
-    from openpyxl import Workbook
-    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
-    from openpyxl.utils import get_column_letter
-
+    import export
     evs = merged_events(snap["evo"], snap["cfg"])
     est, att, tmr = snap["est"], snap["att"], snap["tmr"]
-    label = {"present": "Present", "done": "Completed", "absent": "Absent", "waiting": "Not marked"}
-    st_label = {"upcoming": "Not started", "live": "In progress", "done": "Finished"}
 
     def status(ev, k):
         a = att.get(ev["id"] + "--" + k, {}).get("s")
@@ -454,126 +449,17 @@ def build_workbook(snap, acts, venue_name):
             return "done" if a in ("present", "done") else "absent"
         return a or "waiting"
 
-    wb = Workbook()
-    red = "C8102E"
-    thin = Side(style="thin", color="D9DDE3")
-    fills = {"Completed": "DCEBFF", "Present": "DDF3E4", "Absent": "FBE0E3", "Not marked": "F2F3F5"}
+    def took(ev, k):
+        tm = tmr.get(ev["id"] + "--" + k, {})
+        d = (tm["e"] - tm["s"]) if tm.get("s") and tm.get("e") else None
+        return fmt_dur(d), bool(d and ev["timer"] and d > ev["timer"] * 60000)
 
-    def sheet(ws, headers, rows, widths, status_col=None):
-        ws.append(headers)
-        for c in ws[1]:
-            c.font, c.fill = Font(bold=True, color="FFFFFF"), PatternFill("solid", fgColor=red)
-            c.alignment = Alignment(vertical="center", wrap_text=True)
-        for r in rows:
-            ws.append(r)
-        for i, w in enumerate(widths, 1):
-            ws.column_dimensions[get_column_letter(i)].width = w
-        ws.freeze_panes = "A2"
-        if rows:
-            ws.auto_filter.ref = ws.dimensions
-        for row in ws.iter_rows(min_row=2):
-            for c in row:
-                c.border = Border(bottom=thin)
-            if status_col is not None and row[status_col].value in fills:
-                row[status_col].fill = PatternFill("solid", fgColor=fills[row[status_col].value])
-
-    vn = lambda c: f"{c} - {venue_name.get(c, '')}"
-    per_person, att_rows = {}, []
-    for ev in evs:
-        st = est.get(ev["id"], {}).get("s", "upcoming")
-        for en in ev["entries"]:
-            k = key_of(en)
-            s = status(ev, k)
-            a = att.get(ev["id"] + "--" + k, {})
-            tm = tmr.get(ev["id"] + "--" + k, {})
-            took = (tm["e"] - tm["s"]) if tm.get("s") and tm.get("e") else None
-            over = "Yes" if took and ev["timer"] and took > ev["timer"] * 60000 else ""
-            for c in members(en):
-                p = PEOPLE.get(c, {})
-                per_person.setdefault(c, []).append(s)
-                att_rows.append([ev["title"], vn(ev["venue"]), en.get("team", ""), c, p.get("name", ""), p.get("gender", ""), p.get("parish", ""),
-                                 p.get("phone", ""), label[s], fmt_dur(took), over, st_label[st], a.get("by", ""), a.get("at", "")])
-
-    per_event, ind, church = championship(evs, snap["sheets"], status, snap["points"], venue_name)
-
-    ws = wb.active
-    ws.title = "Summary"
-    ws["A1"] = "Ernakulam Yuvajana Sakhyam Kalamela 2026 - Attendance & Results"
-    ws["A1"].font = Font(bold=True, size=14, color=red)
-    ws["A2"] = "Exported " + now_iso() + " (IST)"
-    cnt = lambda s: sum(1 for r in att_rows if r[8] == s)
-    summary = [("Participants", len(PEOPLE)),
-               ("Participants reported at least once", sum(1 for v in per_person.values() if any(s in ("present", "done") for s in v))),
-               ("Events", len(evs)), ("Events finished", sum(1 for e in evs if est.get(e["id"], {}).get("s") == "done")),
-               ("Events in progress", sum(1 for e in evs if est.get(e["id"], {}).get("s") == "live")),
-               ("Participant entries", len(att_rows)), ("Completed", cnt("Completed")), ("Present", cnt("Present")),
-               ("Absent", cnt("Absent")), ("Not marked yet", cnt("Not marked"))]
-    for i, (k, v) in enumerate(summary, start=4):
-        ws.cell(row=i, column=1, value=k).font = Font(bold=True)
-        ws.cell(row=i, column=2, value=v)
-    ws.column_dimensions["A"].width, ws.column_dimensions["B"].width = 38, 14
-
-    sheet(wb.create_sheet("Attendance"),
-          ["Event", "Venue", "Team", "Chest No", "Participant", "Gender", "Parish", "Contact (parish secretary)", "Status", "Time taken",
-           "Over time", "Event status", "Marked by", "Marked at"], att_rows, [36, 30, 9, 10, 26, 9, 38, 16, 12, 10, 10, 13, 10, 19], status_col=8)
-
-    rrows = []
-    for ev, winners, n in per_event:
-        for rank, k, total, pts in winners:
-            en = next(x for x in ev["entries"] if key_of(x) == k)
-            name = PEOPLE.get(k, {}).get("name", "") if not en.get("team") else "Team " + k
-            rrows.append([ev["title"], rank, k, name, en.get("parish") or PEOPLE.get(k, {}).get("parish", ""), total, pts])
-    sheet(wb.create_sheet("Results"), ["Event", "Rank", "Chest / Team", "Name", "Parish", "Total marks", "Points"], rrows, [40, 7, 12, 28, 40, 12, 8])
-    ws_r = wb["Results"]
-    ws_r.append([])
-    ws_r.append(["Points as per the Kalamela Manual: individual 1st/2nd/3rd = %s, group = %s. Below 50%% marks earns no points or prize. "
-                 "Kalaprathibha / Kalathilakam need at least %d points from individual events." %
-                 ("/".join(f"{x:g}" for x in snap["points"]["ind"]), "/".join(f"{x:g}" for x in snap["points"]["grp"]), AWARD_MIN_POINTS)])
-
-    def ranked(items):
-        items = sorted(items, key=lambda x: -x[1])
-        out = []
-        for i, (k, v) in enumerate(items):
-            out.append((out[-1][0] if i and v == items[i - 1][1] else i + 1, k, v))
-        return out
-
-    chrows = []
-    for g, award in (("Male", "Kalaprathibha"), ("Female", "Kalathilakam")):
-        for rank, k, v in ranked([(k, d["points"]) for k, d in ind.items() if PEOPLE.get(k, {}).get("gender") == g])[:10]:
-            d = ind[k]
-            label = f"{award} (winner)" if rank == 1 and v >= AWARD_MIN_POINTS else f"Individual – {g}"
-            chrows.append([label, rank, k, PEOPLE[k]["name"], PEOPLE[k]["parish"], v, d["first"], d["second"], d["third"]])
-    for rank, k, v in ranked(list(church.items())):
-        chrows.append(["Church", rank, "", "", k, v, "", "", ""])
-    sheet(wb.create_sheet("Championship"), ["Category", "Rank", "Chest No", "Name", "Parish", "Points", "1st places", "2nd places", "3rd places"],
-          chrows, [20, 7, 10, 28, 42, 9, 10, 10, 10])
-
-    erow = []
-    for ev in evs:
-        ss = [status(ev, key_of(en)) for en in ev["entries"]]
-        erow.append([ev["title"], vn(ev["venue"]), st_label[est.get(ev["id"], {}).get("s", "upcoming")], len(ss), ss.count("done"),
-                     ss.count("present"), ss.count("absent"), ss.count("waiting"), ev["judges"], f'{ev["timer"]:g} min' if ev["timer"] else ""])
-    sheet(wb.create_sheet("Events"), ["Event", "Venue", "Status", "Entries", "Completed", "Present", "Absent", "Not marked", "Judges", "Timer"],
-          erow, [40, 30, 13, 9, 11, 9, 9, 11, 8, 9])
-
-    mrows = []
-    for ev in evs:
-        sh = snap["sheets"].get(ev["id"]) or {}
-        for en in ev["entries"]:
-            marks = sh.get(key_of(en)) or []
-            for j, vals in enumerate(marks[:ev["judges"]]):
-                if isinstance(vals, list) and any(isinstance(v, (int, float)) for v in vals):
-                    nums = [v if isinstance(v, (int, float)) else None for v in vals]
-                    mrows.append([ev["title"], key_of(en), f"Judge {j + 1}"] + nums + [sum(v for v in nums if v is not None)])
-    width = max([len(e["criteria"]) for e in evs] + [1])
-    sheet(wb.create_sheet("Marks"), ["Event", "Chest / Team", "Judge"] + [f"Criterion {i + 1}" for i in range(width)] + ["Total"], mrows,
-          [36, 12, 9] + [11] * width + [9])
-    sheet(wb.create_sheet("Activity log"), ["Time (IST)", "By", "Action", "Event", "Chest / Team", "Detail"],
-          [[a["ts"], a["actor"], a["action"], EVENTS.get(a["eid"], {}).get("title", a["eid"]), a["k"], a["detail"]] for a in acts],
-          [19, 10, 18, 40, 12, 20])
-    buf = io.BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
+    champ = championship(evs, snap["sheets"], status, snap["points"], venue_name)
+    return export.build({
+        "evs": evs, "people": PEOPLE, "status": status, "took": took, "att": att, "est": est, "acts": acts,
+        "results": lambda ev: event_results(ev, snap["sheets"].get(ev["id"]), ev["judges"], lambda k: status(ev, k)),
+        "champ": champ, "points": snap["points"], "venue_name": venue_name, "sheets": snap["sheets"],
+        "exported_at": now_iso(), "award_min": AWARD_MIN_POINTS})
 
 
 # ------------------------------------------------------------------ HTTP handler

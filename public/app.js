@@ -280,11 +280,11 @@ const VOL_ROUTES = [["desk", "My venue", "pin"], ["live", "Live now", "bell"], [
 const ADMIN_TABS = ["dashboard", "venues", "participants", "results"];
 const routes = () => isAdmin() ? ADMIN_ROUTES : VOL_ROUTES;
 function currentRoute() { const h = location.hash.slice(1); return routes().some(x => x[0] === h) ? h : routes()[0][0]; }
-window.addEventListener("hashchange", () => { ui.navOpen = false; ui.confirm = null; render(true); window.scrollTo(0, 0); });
+window.addEventListener("hashchange", () => { ui.navOpen = false; ui.moreOpen = false; ui.confirm = null; render(true); window.scrollTo(0, 0); });
 
 /* ================= render ================= */
 function isTyping() { const a = document.activeElement; return a && ["INPUT", "SELECT", "TEXTAREA"].includes(a.tagName) && !["q", "findq"].includes(a.id); }
-let pending = false;
+let pending = false, lastRoute = null, lastPerson = null, moreShown = false;
 function render(force) {
   if (!ME) { renderLogin(); return; }
   if (!BOOT) return;
@@ -316,21 +316,35 @@ function render(force) {
         <span class="clock hide-sm" id="clock">${clock()}</span>
         ${isAdmin() ? `<a class="btn primary sm" href="/api/export.xlsx" download>${icon("down")}<span class="hide-sm">Export Excel</span></a>` : ""}
       </header>
-      <main class="content" id="view">${view(route)}</main>
+      <main class="content ${route !== lastRoute ? "enter" : ""}" id="view">${view(route)}</main>
     </div>
     <nav class="tabbar" aria-label="Quick navigation">
       ${routes().filter(([k]) => !isAdmin() || ADMIN_TABS.includes(k)).map(([k, l, ic]) => `<a href="#${k}" class="${k === route ? "on" : ""}">${icon(ic)}<span>${l.replace("Venue desks", "Desks").replace("Results & rankings", "Results")}</span></a>`).join("")}
-      ${isAdmin() ? `<button data-act="nav-open">${icon("menu")}<span>More</span></button>` : `<button data-act="logout">${icon("out")}<span>Sign out</span></button>`}
+      <button data-act="more-open">${icon("menu")}<span>More</span></button>
     </nav>
   </div>`;
   if (keep) { const el = document.getElementById(keep.id); if (el) { el.focus(); try { el.setSelectionRange(keep.pos, keep.pos); } catch (e) {} } }
-  window.scrollTo(0, sy);
-  renderSheet(); tick();
+  if (route === lastRoute) window.scrollTo(0, sy);
+  lastRoute = route;
+  renderSheet(); renderMore(); tick();
+}
+function renderMore() {
+  let root = document.getElementById("more-root");
+  if (!root) { root = document.createElement("div"); root.id = "more-root"; document.body.appendChild(root); }
+  if (!ui.moreOpen || !ME) { root.innerHTML = ""; moreShown = false; return; }
+  const route = currentRoute();
+  root.innerHTML = `<div class="more ${moreShown ? "" : "anim"}" data-act="more-close"><div class="more-card" role="dialog" aria-label="More">
+    <div class="handle"></div>
+    <div class="more-grid">${routes().map(([k, l, ic]) => `<a href="#${k}" class="${k === route ? "on" : ""}">${icon(ic)}<span>${l}</span></a>`).join("")}
+      <button data-act="logout">${icon("out")}<span>Sign out</span></button></div>
+    <div class="more-who"><div class="avatar">${isAdmin() ? "AD" : esc(ME.venue)}</div>${isAdmin() ? "Administrator · all venues" : esc(vName(ME.venue)) + " · venue volunteer"}</div>
+  </div></div>`;
+  moreShown = true;
 }
 function view(r) {
   switch (r) {
     case "dashboard": return vDashboard();
-    case "venues": return `<div class="toolbar"><div class="seg" role="tablist">${S.venues.map(v => `<button class="${ui.venue === v.code ? "on" : ""}" data-act="venue" data-v="${v.code}">${v.code} · ${esc(v.name)}</button>`).join("")}</div></div>${vDesk(ui.venue)}`;
+    case "venues": return `<div class="toolbar single"><div class="seg" role="tablist">${S.venues.map(v => `<button class="${ui.venue === v.code ? "on" : ""}" data-act="venue" data-v="${v.code}">${v.code} · ${esc(v.name)}</button>`).join("")}</div></div>${vDesk(ui.venue)}`;
     case "participants": return vParticipants();
     case "results": return vResults();
     case "events": return vEvents();
@@ -452,10 +466,10 @@ function callSheet(ev) {
   const tab = ui.tab[ev.id] || (st === "done" ? "marks" : "people");
   let ctl = "";
   if (st === "upcoming") ctl = `<button class="btn success big" data-act="start" data-e="${ev.id}">${icon("play")}Start event</button>`;
-  else if (st === "live") ctl = `<button class="btn danger big" data-act="ask-close" data-e="${ev.id}">${icon("flag")}Event finished</button>`;
-  else if (admin) ctl = `<div class="fix-acts"><button class="btn" data-act="reopen" data-e="${ev.id}" title="The venue volunteer can mark attendance again, then press Event finished">Reopen for corrections</button><button class="btn ghost" data-act="ask-restart" data-e="${ev.id}">Restart attendance</button></div>`;
+  else if (st === "live") ctl = `<button class="btn dark big" data-act="ask-close" data-e="${ev.id}">${icon("flag")}Finish event</button>`;
+  else if (admin) ctl = `<div class="fix-acts"><button class="btn" data-act="reopen" data-e="${ev.id}" title="The venue volunteer can mark attendance again, then press Finish event">Reopen for corrections</button><button class="btn ghost" data-act="ask-restart" data-e="${ev.id}">Restart attendance</button></div>`;
   const restart = ui.confirm && ui.confirm.restart === ev.id ? `<div class="confirm"><span>Clear all attendance and timers for <b>${esc(short(ev.title))}</b> and set it back to Not started? Judges' marks already entered are kept.</span><button class="btn sm" data-act="cancel">Cancel</button><button class="btn sm danger" data-act="restart" data-e="${ev.id}">Clear and restart</button></div>` : "";
-  const conf = ui.confirm && ui.confirm.e === ev.id ? `<div class="confirm"><span>Finish <b>${esc(short(ev.title))}</b>? ${c.waiting ? `<b>${c.waiting}</b> not arrived will be recorded as absent. ` : ""}${c.running ? `<b>${c.running}</b> running timer(s) will stop. ` : ""}Then enter the judges' marks.</span><button class="btn sm" data-act="cancel">Not yet</button><button class="btn sm danger" data-act="close" data-e="${ev.id}">Finish event</button></div>` : "";
+  const conf = ui.confirm && ui.confirm.e === ev.id ? `<div class="confirm"><span>Finish <b>${esc(short(ev.title))}</b>? ${c.waiting ? `<b>${c.waiting}</b> not arrived will be recorded as absent. ` : ""}${c.running ? `<b>${c.running}</b> running timer(s) will stop. ` : ""}Then enter the judges' marks.</span><button class="btn sm" data-act="cancel">Not yet</button><button class="btn sm dark" data-act="close" data-e="${ev.id}">Yes, finish event</button></div>` : "";
   const f = (ui.af || {})[ev.id] || "all";
   const FILT = [["all", "All", ev.entries.length, ""], ["waiting", "To come", c.waiting, "var(--line-2)"], ["here", "Here", c.present, "var(--green)"], ["running", "Timing", c.running, "var(--amber)"], ["done", "Done", c.done, "var(--blue)"], ["absent", "Absent", c.absent, "var(--red)"]];
   const shown = ev.entries.filter(en => { const s = entryStatus(ev, keyOf(en)); return f === "all" || (f === "here" ? s === "present" : s === f); });
@@ -518,7 +532,7 @@ function entryRow(ev, en) {
 /* ---------- judges' marks ---------- */
 function marksPanel(ev) {
   const st = stateOf(ev.id), canEdit = isAdmin() || (ev.venue === ME.venue);
-  if (st !== "done" && !isAdmin()) return `<div class="empty">Marks open when the event is finished. Press <b>Event finished</b> once every participant is done.</div>`;
+  if (st !== "done" && !isAdmin()) return `<div class="empty">Marks open when the event is finished. Press <b>Finish event</b> once every participant is done.</div>`;
   const J = ev.judges, j = Math.min(ui.judge[ev.id] ?? 0, J), sh = sheetOf(ev);
   const ents = ev.entries.filter(en => entryStatus(ev, keyOf(en)) !== "absent");
   const res = results(ev), rk = Object.fromEntries(res.map(r => [r.k, r]));
@@ -607,7 +621,7 @@ function vResults() {
   return `
   <div class="grid-3 awards">${trophyCard(ch)}${award(ch.male, "Kalaprathibha")}${award(ch.female, "Kalathilakam")}</div>
   <div class="stats four">
-    ${stat("blue", "Events finished", `${done.length}<small> / ${ch.per.length}</small>`, "Pressed Event finished")}
+    ${stat("blue", "Events finished", `${done.length}<small> / ${ch.per.length}</small>`, "Finish event pressed")}
     ${stat("green", "Results complete", `${complete}<small> / ${done.length || 0}</small>`, "All judges' marks entered")}
     ${stat("", "Churches with points", ch.churches.length, "Out of " + new Set(BOOT.people.map(p => p.parish)).size + " churches")}
     ${stat("amber", "Prize winners", new Set(ch.per.flatMap(x => x.win.map(w => w.k))).size, "Placed 1st, 2nd or 3rd")}
@@ -701,9 +715,9 @@ function vSettings() {
 /* ---------- person sheet ---------- */
 function renderSheet() {
   const root = $("#sheet-root"), p = ui.person && PEOPLE[ui.person];
-  if (!p) { root.innerHTML = ""; return; }
-  const i = info(p.chest);
-  root.innerHTML = `<div class="overlay" data-act="sheet-close"><aside class="panel" role="dialog" aria-modal="true" aria-label="${esc(p.name)}">
+  if (!p) { root.innerHTML = ""; lastPerson = null; return; }
+  const i = info(p.chest), anim = lastPerson !== p.chest; lastPerson = p.chest;
+  root.innerHTML = `<div class="overlay ${anim ? "anim" : ""}" data-act="sheet-close"><aside class="panel" role="dialog" aria-modal="true" aria-label="${esc(p.name)}"><div class="handle"></div>
     <div class="panel-h"><div style="flex:1;min-width:0"><div class="muted" style="font-size:12.5px;font-weight:600">${p.chest}</div><h2>${esc(p.name)}</h2><div style="margin-top:6px">${badge(i.state)}${i.at ? ` <span class="muted">at</span> ${vbadge(i.at.ev.venue)} ${esc(short(i.at.ev.title))}` : ""}</div></div>
       <button class="btn ghost sm" data-act="sheet-close" aria-label="Close">${icon("x")}</button></div>
     <div class="panel-b">
@@ -724,6 +738,8 @@ document.addEventListener("click", e => {
   switch (a) {
     case "logout": api("/api/logout", {}).finally(() => { ME = null; SET = null; location.hash = ""; renderLogin(); }); break;
     case "nav-open": ui.navOpen = true; render(true); break;
+    case "more-open": ui.moreOpen = true; renderMore(); break;
+    case "more-close": if (e.target !== t) return; ui.moreOpen = false; renderMore(); break;
     case "nav-close": ui.navOpen = false; render(true); break;
     case "venue": ui.venue = t.dataset.v; ui.sel = null; render(true); break;
     case "sel": ui.sel = E; ui.confirm = null; render(true); break;
@@ -764,7 +780,7 @@ function tellNext(eid, k) {
 document.addEventListener("mouseover", e => { const r = e.target.closest("[data-tip]"); const tip = $("#tip"); if (!tip) return;
   if (!r || !r.dataset.tip) { tip.hidden = true; return; } tip.textContent = r.dataset.tip; tip.hidden = false;
   const b = r.getBoundingClientRect(); tip.style.left = Math.min(window.innerWidth - tip.offsetWidth - 8, b.left + 24) + "px"; tip.style.top = (b.top - tip.offsetHeight - 6) + "px"; });
-document.addEventListener("keydown", e => { if (e.key === "Escape") { if (ui.person) { ui.person = null; renderSheet(); } else if (ui.navOpen) { ui.navOpen = false; render(true); } } });
+document.addEventListener("keydown", e => { if (e.key === "Escape") { if (ui.moreOpen) { ui.moreOpen = false; renderMore(); return; } if (ui.person) { ui.person = null; renderSheet(); } else if (ui.navOpen) { ui.navOpen = false; render(true); } } });
 document.addEventListener("input", e => {
   const t = e.target;
   if (t.id === "q") { ui.q = t.value; const el = $("#ptable"); if (el) el.innerHTML = pTable(); }
