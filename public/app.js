@@ -47,7 +47,10 @@ const LBL = { in: "In competition", called: "Called", late: "Late", free: "Free"
   waiting: "Waiting", present: "Present", done: "Performed", absent: "Absent", upcoming: "Upcoming", live: "Live" };
 const TONE = { in: "green", present: "green", live: "green", done: "blue", finished: "blue", late: "red", absent: "red", called: "amber", clash: "amber", waiting: "", upcoming: "", free: "", notyet: "" };
 const badge = (k, txt) => `<span class="badge ${TONE[k] || ""} ${k === "live" ? "live" : ""}">${esc(txt || LBL[k] || k)}</span>`;
-const vbadge = c => `<span class="vbadge" style="--vc:var(--${c.toLowerCase()})">${esc(c)}</span>`;
+const PALETTE = ["#2563eb", "#0d9488", "#9333ea", "#d97706", "#65a30d", "#db2777", "#0891b2", "#4f46e5", "#ca8a04", "#dc2626"];
+const vcolor = c => { const n = parseInt(String(c).slice(1), 10); return PALETTE[((isNaN(n) ? 1 : n) - 1) % PALETTE.length]; };
+const VENUES = () => (S.venues && S.venues.length ? S.venues : BOOT.venues);
+const vbadge = c => `<span class="vbadge" style="--vc:${vcolor(c)}">${esc(c)}</span>`;
 const vName = c => VMAP[c] ? VMAP[c].name : c;
 
 /* ================= derived ================= */
@@ -115,7 +118,7 @@ async function poll(force) {
   try {
     const j = await api("/api/state?v=" + (force ? 0 : S.version));
     ONLINE = true;
-    if (j.changed) { S.version = j.version; S.evo = j.evo; S.est = j.est; S.att = j.att; render(); }
+    if (j.changed) { S.version = j.version; S.evo = j.evo; S.est = j.est; S.att = j.att; S.venues = j.venues || S.venues; VMAP = Object.fromEntries(VENUES().map(v => [v.code, v])); render(); }
     else updateLive();
   } catch (e) { ONLINE = false; updateLive(); }
 }
@@ -175,7 +178,7 @@ function SEEDPEOPLE() { return BOOT.people; }
 function view(r) {
   switch (r) {
     case "dashboard": return vDashboard();
-    case "venues": return `<div class="toolbar"><div class="seg" role="tablist">${BOOT.venues.map(v => `<button class="${ui.venue === v.code ? "on" : ""}" data-act="venue" data-v="${v.code}">${v.code} · ${esc(v.name)}</button>`).join("")}</div></div>${vDesk(ui.venue)}`;
+    case "venues": return `<div class="toolbar"><div class="seg" role="tablist">${VENUES().map(v => `<button class="${ui.venue === v.code ? "on" : ""}" data-act="venue" data-v="${v.code}">${v.code} · ${esc(v.name)}</button>`).join("")}</div></div>${vDesk(ui.venue)}`;
     case "participants": return vParticipants();
     case "events": return vEvents();
     case "reports": return vReports();
@@ -228,12 +231,12 @@ function vDashboard() {
     stat("blue", "Events completed", `${doneN}<small> / ${es.length}</small>`, "", doneN / es.length),
   ].join("");
 
-  const venues = BOOT.venues.map(v => {
+  const venues = VENUES().map(v => {
     const evs = IDX.evs.filter(e => e.venue === v.code);
     const live = evs.filter(e => stateOf(e.id) === "live");
     const next = evs.find(e => stateOf(e.id) === "upcoming");
     const d = evs.filter(e => stateOf(e.id) === "done").length;
-    return `<div class="card venue" style="--vc:var(--${v.code.toLowerCase()})">
+    return `<div class="card venue" style="--vc:${vcolor(v.code)}">
       <div class="card-h">${vbadge(v.code)}<h2>${esc(v.name)}</h2><span class="grow"></span><span class="sub">${d}/${evs.length} done</span></div>
       <div class="card-b">
         ${live.length ? live.map(e => { const c = counts(e); return `<div class="now-ev"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${badge("live", "Live")}<a href="#venues" data-act="open-ev" data-e="${e.id}">${esc(short(e.title))}</a></div>${progress(c, e.entries.length)}</div>`; }).join("") : `<div class="muted">No event running.</div>`}
@@ -283,11 +286,11 @@ function timeline() {
   const ticks = []; for (let h = 9; h <= 19; h++) ticks.push(`<span class="tl-tick" style="left:${x(h * 60)}%">${h > 12 ? h - 12 : h} ${h >= 12 ? "PM" : "AM"}</span>`);
   const grid = `background-image:linear-gradient(to right,var(--line) 0 1px,transparent 1px);background-size:${100 / (span / 60)}% 100%;background-position:${x(9 * 60)}% 0`;
   const now = lbl => n >= T0 && n <= T1 ? `<div class="tl-now" style="left:${x(n)}%">${lbl ? `<span>${fmt(n)}</span>` : ""}</div>` : "";
-  const rows = BOOT.venues.map(v => {
+  const rows = VENUES().map(v => {
     const evs = IDX.evs.filter(e => e.venue === v.code), lanes = [];
     const placed = evs.map(e => { let l = lanes.findIndex(end => end <= e.start); if (l < 0) { l = lanes.length; lanes.push(0); } lanes[l] = e.end; return { e, l }; });
     const h = Math.max(1, lanes.length) * 30 + 8;
-    return `<div class="tl-row" style="--vc:var(--${v.code.toLowerCase()})"><div class="tl-lab">${vbadge(v.code)}<span>${esc(v.name)}</span></div>
+    return `<div class="tl-row" style="--vc:${vcolor(v.code)}"><div class="tl-lab">${vbadge(v.code)}<span>${esc(v.name)}</span></div>
       <div class="tl-track" style="height:${h}px;${grid}"><div class="tl-lunch" style="left:${x(810)}%;width:${x(855) - x(810)}%"></div>
       ${placed.map(({ e, l }) => { const st = stateOf(e.id), late = st === "upcoming" && n > e.start + 10 && n < e.start + 240;
         return `<button class="tl-blk ${st} ${late ? "late" : ""}" style="left:${x(e.start)}%;width:calc(${x(e.end) - x(e.start)}% - 2px);top:${4 + l * 30}px" data-act="open-ev" data-e="${e.id}" title="${esc(short(e.title))} · ${fmt(e.start)}–${fmt(e.end)} · ${LBL[st]}">${esc(short(e.title))}</button>`; }).join("")}
@@ -407,7 +410,7 @@ function findRows(hits, q) {
 
 /* ---------- events editor ---------- */
 function vEvents() {
-  const opts = v => BOOT.venues.map(x => `<option value="${x.code}" ${x.code === v ? "selected" : ""}>${x.code} · ${esc(x.name)}</option>`).join("");
+  const opts = v => VENUES().map(x => `<option value="${x.code}" ${x.code === v ? "selected" : ""}>${x.code} · ${esc(x.name)}</option>`).join("");
   return `<div class="banner" style="background:var(--blue-bg);color:#1e3a8a">Assign each event to a venue and adjust its time. Volunteers only see the events at their own venue. Call times move with the start time.</div>
   <div class="card"><div class="table-wrap"><table class="t cards"><thead><tr><th>Event</th><th>Venue</th><th>Start</th><th>End</th><th>Status</th><th>Attendance</th><th></th></tr></thead><tbody>
   ${IDX.evs.map(e => { const st = stateOf(e.id), c = counts(e), ch = S.evo[e.id] && Object.keys(S.evo[e.id]).length;
@@ -437,21 +440,42 @@ function vReports() {
 }
 
 /* ---------- settings ---------- */
-let CODES = null;
+let SET = null;
+function loadSettings() { return api("/api/settings").then(j => { SET = j; render(true); }).catch(e => toast(e.message, true)); }
 function vSettings() {
-  if (!CODES) { api("/api/settings").then(j => { CODES = j.codes; render(true); }).catch(e => toast(e.message, true)); return `<div class="card empty">Loading…</div>`; }
-  return `<div class="grid-2">
-  <div class="card"><div class="card-h"><h2>Sign-in codes</h2></div><div class="card-b">
-    <form class="settings-form" id="codes-form">
-      <div class="row2">${BOOT.venues.map(v => `<div class="field"><label for="c-${v.code}">${v.code} · ${esc(v.name)}</label><input class="input code" id="c-${v.code}" value="${esc(CODES[v.code])}"></div>`).join("")}</div>
-      <div class="field"><label for="c-admin">Admin code</label><input class="input code" id="c-admin" value="${esc(CODES.admin)}"></div>
-      <div><button class="btn primary" type="submit">Save codes</button></div>
-      <div class="muted" style="font-size:12.5px">Saving new codes signs out every other device. Share the new venue codes with volunteers.</div>
+  if (!SET) { loadSettings(); return `<div class="card empty">Loading…</div>`; }
+  const rows = SET.venues.map(v => `<tr>
+      <td data-l="Venue" class="lead"><span class="vbadge" style="--vc:${vcolor(v.code)}">${esc(v.code)}</span></td>
+      <td data-l="Name"><input class="input" id="vn-${v.code}" value="${esc(v.name)}" maxlength="60" aria-label="Name of ${esc(v.code)}"></td>
+      <td data-l="Sign-in code"><input class="input code" id="vp-${v.code}" value="${esc(v.pass)}" maxlength="24" aria-label="Sign-in code for ${esc(v.code)}"></td>
+      <td data-l="Events" class="num">${v.events}</td>
+      <td data-l="">${ui.confirm && ui.confirm.delVenue === v.code
+        ? `<span class="muted" style="font-size:12.5px">Remove?</span> <button type="button" class="btn sm" data-act="cancel">No</button> <button type="button" class="btn sm danger" data-act="venue-del-do" data-v="${v.code}">Remove</button>`
+        : `<button type="button" class="btn sm ghost" data-act="venue-del-ask" data-v="${v.code}" ${v.events ? `disabled title="Move its ${v.events} event(s) to another venue first"` : ""}>Remove</button>`}</td></tr>`).join("");
+  return `
+  <div class="card"><div class="card-h"><h2>Venues &amp; sign-in codes</h2><span class="grow"></span><span class="sub">${SET.venues.length} venues</span></div>
+    <form id="venues-form" autocomplete="off">
+      <div class="table-wrap"><table class="t cards"><thead><tr><th>Code</th><th>Venue name</th><th>Sign-in code (password)</th><th>Events</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+      <div class="card-b" style="display:grid;gap:14px;border-top:1px solid var(--line)">
+        <div class="field" style="max-width:320px;margin:0"><label for="c-admin">Admin code</label><input class="input code" id="c-admin" value="${esc(SET.admin)}" maxlength="24"></div>
+        <div class="toolbar"><button class="btn primary" type="submit">Save venues &amp; codes</button><span class="muted" style="font-size:12.5px">Changing any code signs out every other device. Share the new codes with volunteers.</span></div>
+      </div>
+    </form>
+  </div>
+  <div class="grid-2">
+  <div class="card"><div class="card-h"><h2>Add a venue</h2></div><div class="card-b">
+    <form class="settings-form" id="venue-add-form" autocomplete="off">
+      <div class="row2">
+        <div class="field"><label for="nv-name">Venue name</label><input class="input" id="nv-name" placeholder="e.g. Parish Hall" maxlength="60"></div>
+        <div class="field"><label for="nv-pass">Sign-in code (password)</label><input class="input code" id="nv-pass" placeholder="e.g. PHALL6" maxlength="24"></div>
+      </div>
+      <div><button class="btn primary" type="submit">Add venue</button></div>
+      <div class="muted" style="font-size:12.5px">Then open <a href="#events">Events &amp; schedule</a> to move events into it and set their times. Its volunteers sign in with this code.</div>
     </form></div></div>
   <div class="card"><div class="card-h"><h2>Practice &amp; reset</h2></div><div class="card-b" style="display:grid;gap:16px">
     <div><b>Load practice data</b><div class="muted" style="margin:2px 0 10px">Fills in sample attendance up to the current time so volunteers can rehearse. Replaces all current marks.</div>
       ${ui.confirm && ui.confirm.sample ? `<div class="confirm" style="margin:0"><span>Replace all attendance with practice data?</span><button class="btn sm" data-act="cancel">Cancel</button><button class="btn sm primary" data-act="sample-do">Load practice data</button></div>` : `<button class="btn" data-act="sample-ask">Load practice data</button>`}</div>
-    <div><b>Reset attendance</b><div class="muted" style="margin:2px 0 10px">Clears every mark and event status before the real day. Schedule changes are kept. Download the Excel first if you need a copy.</div>
+    <div><b>Reset attendance</b><div class="muted" style="margin:2px 0 10px">Clears every mark and event status before the real day. Venues and schedule changes are kept. Download the Excel first if you need a copy.</div>
       ${ui.confirm && ui.confirm.reset ? `<div class="confirm" style="margin:0"><span>Delete all ${Object.keys(S.att).length} marks and ${Object.keys(S.est).length} event statuses? This cannot be undone.</span><button class="btn sm" data-act="cancel">Cancel</button><button class="btn sm danger" data-act="reset-do">Reset everything</button></div>` : `<button class="btn danger" data-act="reset-ask">Reset attendance</button>`}</div>
   </div></div></div>`;
 }
@@ -480,7 +504,7 @@ document.addEventListener("click", e => {
   if (t.tagName === "A" && a !== "open-ev") e.preventDefault();
   if (a === "open-ev") e.preventDefault();
   switch (a) {
-    case "logout": api("/api/logout", {}).finally(() => { ME = null; CODES = null; location.hash = ""; renderLogin(); }); break;
+    case "logout": api("/api/logout", {}).finally(() => { ME = null; SET = null; location.hash = ""; renderLogin(); }); break;
     case "nav-open": ui.navOpen = true; render(true); break;
     case "nav-close": ui.navOpen = false; render(true); break;
     case "venue": ui.venue = t.dataset.v; ui.sel = null; render(true); break;
@@ -497,6 +521,8 @@ document.addEventListener("click", e => {
     case "reopen": setEventState(t.dataset.e, "live"); break;
     case "ev-reset": { const o = ORIG[t.dataset.e]; editEvent(o.id, { venue: o.venue, start: o.start, end: o.end }); break; }
     case "reset-ask": ui.confirm = { reset: true }; render(true); break;
+    case "venue-del-ask": ui.confirm = { delVenue: t.dataset.v }; render(true); break;
+    case "venue-del-do": ui.confirm = null; api("/api/venue-delete", { code: t.dataset.v }).then(() => { toast("Venue removed"); SET = null; return poll(true); }).then(() => render(true)).catch(er => { toast(er.message, true); render(true); }); break;
     case "sample-ask": ui.confirm = { sample: true }; render(true); break;
     case "reset-do": ui.confirm = null; api("/api/reset", {}).then(() => { toast("All attendance cleared"); return poll(true); }).catch(er => toast(er.message, true)); break;
     case "sample-do": { ui.confirm = null; const n = Math.min(Math.max(nowMin(), 9 * 60 + 30), 17 * 60 + 30);
@@ -524,9 +550,16 @@ document.addEventListener("submit", async e => {
     try { const j = await api("/api/login", { code: $("#code").value }); ME = j.user; location.hash = ""; await start(); }
     catch (x) { err.textContent = x.message; }
   }
-  if (e.target.id === "codes-form") {
-    const codes = { admin: $("#c-admin").value }; BOOT.venues.forEach(v => codes[v.code] = $("#c-" + v.code).value);
-    try { await api("/api/settings", { codes }); CODES = null; toast("Codes saved. Other devices have been signed out."); render(true); } catch (x) { toast(x.message, true); }
+  if (e.target.id === "venues-form") {
+    const venues = SET.venues.map(v => ({ code: v.code, name: $("#vn-" + v.code).value, pass: $("#vp-" + v.code).value }));
+    try { const j = await api("/api/settings", { admin: $("#c-admin").value, venues }); SET = null; await poll(true);
+      toast(j.signedOut ? "Saved. Other devices were signed out because codes changed." : "Saved."); render(true); }
+    catch (x) { toast(x.message, true); }
+  }
+  if (e.target.id === "venue-add-form") {
+    try { const j = await api("/api/venue-add", { name: $("#nv-name").value, pass: $("#nv-pass").value }); SET = null; await poll(true);
+      toast("Venue " + j.code + " added. Assign events to it under Events & schedule."); render(true); }
+    catch (x) { toast(x.message, true); }
   }
 });
 

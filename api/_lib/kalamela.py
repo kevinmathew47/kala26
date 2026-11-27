@@ -181,8 +181,11 @@ class Tx:
             "CREATE TABLE IF NOT EXISTS kl_event_state(id TEXT PRIMARY KEY, state TEXT, ts TEXT, actor TEXT)",
             "CREATE TABLE IF NOT EXISTS kl_attendance(eid TEXT, k TEXT, status TEXT, ts TEXT, actor TEXT, PRIMARY KEY(eid, k))",
             f"CREATE TABLE IF NOT EXISTS kl_activity(id {serial}, ts TEXT, actor TEXT, action TEXT, eid TEXT, k TEXT, detail TEXT)",
+            "CREATE TABLE IF NOT EXISTS kl_venue(code TEXT PRIMARY KEY, name TEXT, pos INTEGER)",
         ):
             self.run(s)
+        for i, v in enumerate(VENUES):  # the confirmed venues; the admin can add more
+            self.run("INSERT INTO kl_venue(code,name,pos) VALUES(?,?,?) ON CONFLICT(code) DO NOTHING", (v["code"], v["name"], i + 1))
         defaults = {"version": "1", "codes_version": "1", "secret": secrets.token_hex(32)}
         for k, v in VENUE_DEFAULT_CODES.items():
             defaults["code_" + k] = v
@@ -217,9 +220,13 @@ class Tx:
             out[r["id"]] = o
         return out
 
+    def venues(self):
+        return [{"code": r["code"], "name": r["name"]} for r in self.all("SELECT code,name,pos FROM kl_venue ORDER BY pos, code")]
+
     def snapshot(self, version):
         return {
             "version": version,
+            "venues": self.venues(),
             "evo": self.overrides(),
             "est": {r["id"]: {"s": r["state"], "at": r["ts"], "by": r["actor"]} for r in self.all("SELECT * FROM kl_event_state")},
             "att": {r["eid"] + "--" + r["k"]: {"s": r["status"], "at": r["ts"], "by": r["actor"]} for r in self.all("SELECT * FROM kl_attendance")},
@@ -246,6 +253,33 @@ def merged_events(evo):
                     "entries": [{**x, "time": x["time"] + d} for x in e["entries"]]})
     out.sort(key=lambda e: (e["start"], e["venue"]))
     return out
+
+
+def check_session(t, cfg, token):
+    """Signed cookie plus: a venue volunteer is signed out if their venue was removed."""
+    s = read_session(cfg, token)
+    if s and s["role"] == "venue" and s["venue"] not in {v["code"] for v in t.venues()}:
+        return None
+    return s
+
+
+def next_venue_code(venues):
+    nums = [int(v["code"][1:]) for v in venues if v["code"][1:].isdigit()]
+    return "V" + str(max(nums + [0]) + 1)
+
+
+def validate_codes(passes, names):
+    if any(not n for n in names.values()):
+        return "Every venue needs a name."
+    if any(len(v) < 4 for v in passes.values()):
+        return "Each code needs at least 4 characters."
+    if any(not all(ch.isalnum() or ch in "-_" for ch in v) for v in passes.values()):
+        return "Codes can use only letters, numbers, - and _."
+    if len(set(passes.values())) != len(passes):
+        return "Every code must be different."
+    if len({n.lower() for n in names.values()}) != len(names):
+        return "Two venues have the same name."
+    return ""
 
 
 def actor(sess):
@@ -288,7 +322,7 @@ def fmt_min(m):
     return f"{h % 12 or 12}:{mm:02d} {ap}"
 
 
-def build_workbook(snap, acts):
+def build_workbook(snap, acts, VENUE_NAME):
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
     from openpyxl.utils import get_column_letter
@@ -465,7 +499,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             with STORE.tx() as t:
                 cfg = t.config()
-                s = read_session(cfg, self.token())
+                s = check_session(t, cfg, self.token())
                 if p == "/api/me":
                     return self.json({"user": s, "setup": bool(codes_of(cfg)["admin"] or env_admin_code())})
                 if not s:
@@ -483,13 +517,18 @@ class Handler(BaseHTTPRequestHandler):
                     return self.json({"error": "Only the admin can do this."}, 403)
                 if p == "/api/settings":
                     c = codes_of(cfg)
-                    return self.json({"codes": {**c, "admin": c["admin"] or env_admin_code()}})
+                    used = {}
+                    for e in merged_events(t.overrides()):
+                        used[e["venue"]] = used.get(e["venue"], 0) + 1
+                    return self.json({"admin": c["admin"] or env_admin_code(),
+                                      "venues": [{**v, "pass": c.get(v["code"], ""), "events": used.get(v["code"], 0)} for v in t.venues()]})
                 if p == "/api/export.xlsx":
                     snap = t.snapshot(int(cfg.get("version", "1")))
+                    vnames = {v["code"]: v["name"] for v in snap["venues"]}
                     acts = t.all("SELECT ts,actor,action,eid,k,detail FROM kl_activity ORDER BY id")
                 else:
                     return self.json({"error": "Not found"}, 404)
-            data = build_workbook(snap, acts)
+            data = build_workbook(snap, acts, vnames)
             name = "Kalamela2026_Attendance_" + datetime.now(IST).strftime("%Y%m%d_%H%M") + ".xlsx"
             return self.send(200, data, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                              {"Content-Disposition": f'attachment; filename="{name}"'})
@@ -519,7 +558,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self.login(t, cfg, b)
                 if p == "/api/logout":
                     return self.json({"ok": True}, headers={"Set-Cookie": self.cookie("", 0)})
-                s = read_session(cfg, self.token())
+                s = check_session(t, cfg, self.token())
                 if not s:
                     return self.json({"error": "Please sign in again."}, 401)
                 return self.action(t, cfg, s, p, b)
@@ -529,6 +568,7 @@ class Handler(BaseHTTPRequestHandler):
     def login(self, t, cfg, b):
         code = str(b.get("code", "")).strip().upper()
         cs = codes_of(cfg)
+        live_venues = {v["code"] for v in t.venues()}
         admin_codes = {c for c in (cs["admin"].upper(), env_admin_code()) if c}
         if not admin_codes and not code:
             return self.json({"error": "No admin code is set. Add KALAMELA_ADMIN_CODE in the hosting settings."}, 400)
@@ -536,7 +576,7 @@ class Handler(BaseHTTPRequestHandler):
         if code and code in admin_codes:
             role = "admin"
         else:
-            venue = next((k for k, v in cs.items() if k != "admin" and v.upper() == code), None) if code else None
+            venue = next((k for k, v in cs.items() if k in live_venues and v.upper() == code), None) if code else None
             role = "venue" if venue else None
         if not role:
             time.sleep(0.4)
@@ -597,7 +637,7 @@ class Handler(BaseHTTPRequestHandler):
             o = EVENTS.get(eid)
             if not o:
                 return self.json({"error": "Unknown event."}, 400)
-            venue = b.get("venue") if b.get("venue") in VENUE_NAME else None
+            venue = b.get("venue") if b.get("venue") in {v["code"] for v in t.venues()} else None
             start, end = b.get("start"), b.get("end")
             vals = (venue if venue and venue != o["venue"] else None,
                     int(start) if isinstance(start, (int, float)) and int(start) != o["start"] else None,
@@ -612,18 +652,66 @@ class Handler(BaseHTTPRequestHandler):
             return self.json({"ok": True})
 
         if p == "/api/settings":
-            new = b.get("codes") or {}
-            vals = {k: str(new.get(k, "")).strip().upper() for k in ("admin", *VENUE_DEFAULT_CODES)}
-            if any(len(v) < 4 for v in vals.values()):
-                return self.json({"error": "Each code needs at least 4 characters."}, 400)
-            if len(set(vals.values())) != len(vals):
-                return self.json({"error": "Every code must be different."}, 400)
-            for k, v in vals.items():
+            venues = t.venues()
+            codes = codes_of(cfg)
+            given = {str(v.get("code")): v for v in (b.get("venues") or []) if isinstance(v, dict)}
+            admin = str(b.get("admin", codes["admin"])).strip().upper()
+            names, passes = {}, {"admin": admin}
+            for v in venues:
+                g = given.get(v["code"], {})
+                names[v["code"]] = str(g.get("name", v["name"])).strip()[:60]
+                passes[v["code"]] = str(g.get("pass", codes.get(v["code"], ""))).strip().upper()
+            err = validate_codes(passes, names)
+            if err:
+                return self.json({"error": err}, 400)
+            changed = any(passes[k] != codes.get(k, "") for k in passes)
+            for v in venues:
+                if names[v["code"]] != v["name"]:
+                    t.run("UPDATE kl_venue SET name=? WHERE code=?", (names[v["code"]], v["code"]))
+            for k, v in passes.items():
                 t.set_config("code_" + k, v)
-            t.set_config("codes_version", int(cfg.get("codes_version", "1")) + 1)  # signs out every device
-            t.log(who, "Changed sign-in codes")
+            if changed:
+                t.set_config("codes_version", int(cfg.get("codes_version", "1")) + 1)  # signs out every other device
+            t.log(who, "Saved venues and codes" + (" (codes changed)" if changed else ""))
+            t.bump()
             cfg = t.config()
-            return self.json({"ok": True}, headers={"Set-Cookie": self.cookie(sign_session(cfg, "admin", None), SESSION_HOURS * 3600)})
+            return self.json({"ok": True, "signedOut": changed},
+                             headers={"Set-Cookie": self.cookie(sign_session(cfg, "admin", None), SESSION_HOURS * 3600)})
+
+        if p == "/api/venue-add":
+            venues = t.venues()
+            codes = codes_of(cfg)
+            name = str(b.get("name", "")).strip()[:60]
+            pw = str(b.get("pass", "")).strip().upper()
+            code = next_venue_code(venues)
+            passes = {k: codes.get(k, "") for k in ["admin"] + [v["code"] for v in venues]}
+            passes[code] = pw
+            names = {v["code"]: v["name"] for v in venues}
+            names[code] = name
+            err = validate_codes(passes, names)
+            if err:
+                return self.json({"error": err}, 400)
+            t.run("INSERT INTO kl_venue(code,name,pos) VALUES(?,?,?)", (code, name, len(venues) + 1))
+            t.set_config("code_" + code, pw)
+            t.log(who, "Added venue", "", code, name)
+            t.bump()
+            return self.json({"ok": True, "code": code})
+
+        if p == "/api/venue-delete":
+            code = str(b.get("code", ""))
+            venues = t.venues()
+            if code not in {v["code"] for v in venues}:
+                return self.json({"error": "Unknown venue."}, 400)
+            if len(venues) <= 1:
+                return self.json({"error": "At least one venue is needed."}, 400)
+            n = sum(1 for e in evs.values() if e["venue"] == code)
+            if n:
+                return self.json({"error": f"Move its {n} event(s) to another venue first, on the Events & schedule page."}, 409)
+            t.run("DELETE FROM kl_venue WHERE code=?", (code,))
+            t.run("DELETE FROM kl_config WHERE name=?", ("code_" + code,))
+            t.log(who, "Removed venue", "", code)
+            t.bump()
+            return self.json({"ok": True})
 
         if p == "/api/reset":
             t.run("DELETE FROM kl_attendance")
