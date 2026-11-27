@@ -652,3 +652,7 @@ select.input{appearance:none;-webkit-appearance:none;padding-right:34px;cursor:p
   .picker.open .pk-pop::before{content:"";display:block;width:40px;height:5px;border-radius:99px;background:var(--line-2);margin:2px auto 8px}
   .pk-opt{padding:12px 10px;min-height:52px}
 }
+/* dropdown & sheet animations play only when they open (not on live refresh) */
+.pk-pop,.picker.open::before{animation:none}
+.picker.anim .pk-pop{animation:pop .2s var(--ease)}
+@media (max-width:1023px){.picker.open .pk-pop{animation:none}.picker.anim .pk-pop{animation:sheet-up .3s var(--ease)}.picker.anim::before{animation:fade .2s ease}}

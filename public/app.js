@@ -207,7 +207,7 @@ function trophyCard(ch, compact) {
 /* glass dropdown: groups = [[label, [{v, t, sub, tone}]]] */
 function picker(id, label, cur, groups) {
   const open = ui.pk === id, all = groups.flatMap(g => g[1]), c = all.find(o => o.v === cur) || all[0] || {};
-  return `<div class="picker ${open ? "open" : ""}" data-pk="${id}">
+  return `<div class="picker ${open ? "open" : ""} ${open && ui.pkAnim === id ? "anim" : ""}" data-pk="${id}">
     <button class="pk-btn" data-act="pk-toggle" data-pk="${id}" aria-haspopup="listbox" aria-expanded="${open}">
       <span class="pk-main"><small>${esc(label)}</small><b>${esc(c.t || "")}</b>${c.sub ? `<em>${c.sub}</em>` : ""}</span>${icon("chev")}</button>
     ${open ? `<div class="pk-pop" role="listbox">${groups.filter(g => g[1].length).map(([gl, opts]) => `<div class="pk-group">${gl ? `<div class="pk-gl">${esc(gl)}<span>${opts.length}</span></div>` : ""}
@@ -294,20 +294,27 @@ const VOL_ROUTES = [["desk", "My venue", "pin"], ["live", "Live now", "bell"], [
 const ADMIN_TABS = ["dashboard", "venues", "participants", "results"];
 const routes = () => isAdmin() ? ADMIN_ROUTES : VOL_ROUTES;
 function currentRoute() { const h = location.hash.slice(1); return routes().some(x => x[0] === h) ? h : routes()[0][0]; }
-window.addEventListener("hashchange", () => { ui.navOpen = false; ui.moreOpen = false; ui.confirm = null; render(true); window.scrollTo(0, 0); });
+window.addEventListener("hashchange", () => { ui.navOpen = false; ui.moreOpen = false; ui.pk = null; ui.confirm = null; render(true); window.scrollTo(0, 0); });
 
 /* ================= render ================= */
 function isTyping() { const a = document.activeElement; return a && ["INPUT", "SELECT", "TEXTAREA"].includes(a.tagName) && !["q", "findq"].includes(a.id); }
-let pending = false, lastRoute = null, lastPerson = null, moreShown = false;
+let pending = false, lastRoute = null, lastPerson = null, moreShown = false, PRESSING = false;
+const SCROLLERS = ".table-wrap, .lb-items, .afilter, .list.scroll, .ev-list, .tabs-in, .seg, .pk-pop";
+function keepScroll() { return [...document.querySelectorAll(SCROLLERS)].map(el => [el.scrollLeft, el.scrollTop]); }
+function restoreScroll(k) { document.querySelectorAll(SCROLLERS).forEach((el, i) => { if (k[i]) { el.scrollLeft = k[i][0]; el.scrollTop = k[i][1]; } }); }
+document.addEventListener("pointerdown", () => { PRESSING = true; }, true);
+const release = () => { PRESSING = false; if (pending) setTimeout(() => { if (pending && !PRESSING) render(); }, 60); };
+document.addEventListener("pointerup", release, true);
+document.addEventListener("pointercancel", release, true);
 function render(force) {
   if (!ME) { renderLogin(); return; }
   if (!BOOT) return;
-  if (isTyping() && !force) { pending = true; return; }
+  if (!force && (isTyping() || ui.pk || PRESSING)) { pending = true; return; }
   pending = false;
   index();
   const route = currentRoute();
   const keep = document.activeElement && ["q", "findq"].includes(document.activeElement.id) ? { id: document.activeElement.id, pos: document.activeElement.selectionStart } : null;
-  const sy = window.scrollY;
+  const sy = window.scrollY, kept = keepScroll();
   const title = routes().find(r => r[0] === route)[1];
   $("#root").innerHTML = `
   <div class="app ${ui.navOpen ? "nav-open" : ""}">
@@ -338,7 +345,7 @@ function render(force) {
     </nav>
   </div>`;
   if (keep) { const el = document.getElementById(keep.id); if (el) { el.focus(); try { el.setSelectionRange(keep.pos, keep.pos); } catch (e) {} } }
-  if (route === lastRoute) window.scrollTo(0, sy);
+  if (route === lastRoute) { window.scrollTo(0, sy); restoreScroll(kept); }
   lastRoute = route;
   renderSheet(); renderMore(); tick();
 }
@@ -734,6 +741,7 @@ function renderSheet() {
   const root = $("#sheet-root"), p = ui.person && PEOPLE[ui.person];
   if (!p) { root.innerHTML = ""; lastPerson = null; return; }
   const i = info(p.chest), anim = lastPerson !== p.chest; lastPerson = p.chest;
+  const prevPanel = root.querySelector(".panel"), keepTop = !anim && prevPanel ? prevPanel.scrollTop : 0;
   root.innerHTML = `<div class="overlay ${anim ? "anim" : ""}" data-act="sheet-close"><aside class="panel" role="dialog" aria-modal="true" aria-label="${esc(p.name)}"><div class="handle"></div>
     <div class="panel-h"><div style="flex:1;min-width:0"><div class="muted" style="font-size:12.5px;font-weight:600">${p.chest}</div><h2>${esc(p.name)}</h2><div style="margin-top:6px">${badge(i.state)}${i.at ? ` <span class="muted">at</span> ${vbadge(i.at.ev.venue)} ${esc(short(i.at.ev.title))}` : ""}</div></div>
       <button class="btn ghost sm" data-act="sheet-close" aria-label="Close">${icon("x")}</button></div>
@@ -743,11 +751,12 @@ function renderSheet() {
       ${i.list.map(x => { const t = tmrOf(x.ev.id, x.k); const took = t && t.s && t.e ? ` · took ${mmss(t.e - t.s)}` : "";
         return `<div class="step ${x.st === "running" ? "present" : x.st}"><div class="tt">${esc(short(x.ev.title))}${x.en.team ? ` <span class="muted">· team ${esc(x.en.team)}</span>` : ""}</div><div class="mt">${vbadge(x.ev.venue)}<span>${esc(vName(x.ev.venue))}</span>${badge(x.st)}${x.es === "live" ? badge("live", "Event in progress") : x.es === "done" ? badge("closed") : ""}<span>${took}</span></div></div>`; }).join("")}</div></div>
     </div></aside></div>`;
+  if (keepTop) root.querySelector(".panel").scrollTop = keepTop;
 }
 
 /* ================= events ================= */
 document.addEventListener("click", e => {
-  if (ui.pk && !e.target.closest(".picker")) { ui.pk = null; render(true); }
+  if (ui.pk && !e.target.closest(".pk-pop, .pk-btn")) { ui.pk = null; render(true); if (e.target.closest(".picker")) return; }
   const t = e.target.closest("[data-act]"); if (!t) return;
   const a = t.dataset.act;
   if (a === "sheet-close") { if (t.classList.contains("overlay") && e.target !== t) return; ui.person = null; renderSheet(); return; }
@@ -757,7 +766,8 @@ document.addEventListener("click", e => {
     case "logout": api("/api/logout", {}).finally(() => { ME = null; SET = null; location.hash = ""; renderLogin(); }); break;
     case "nav-open": ui.navOpen = true; render(true); break;
     case "more-open": ui.moreOpen = true; renderMore(); break;
-    case "pk-toggle": ui.pk = ui.pk === t.dataset.pk ? null : t.dataset.pk; render(true); break;
+    case "pk-toggle": ui.pk = ui.pk === t.dataset.pk ? null : t.dataset.pk; ui.pkAnim = ui.pk; render(true); ui.pkAnim = null;
+      if (ui.pk) { const on = document.querySelector(".pk-opt.on"); if (on) on.scrollIntoView({ block: "nearest" }); } break;
     case "pk-pick": { const id = t.dataset.pk, v = t.dataset.v; ui.pk = null;
       if (id === "ev") { ui.sel = v; ui.confirm = null; } else if (id === "venue") { ui.venue = v; ui.sel = null; }
       render(true); break; }
