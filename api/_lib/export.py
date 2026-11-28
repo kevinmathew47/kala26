@@ -186,7 +186,12 @@ def build(ctx):
         c.alignment = Alignment(horizontal="left")
     style_table(ws, r + 1, r + len(facts), 1, 2)
     r += len(facts) + 2
-    ws.cell(row=r, column=1, value="Rules applied: 1st / 2nd / 3rd earn the points above; a participant below 50% of the maximum marks earns no place or points; "
+    rl = ctx.get("rules") or {}
+    rule50 = ("a participant below 50% of the maximum marks earns no place or points" if rl.get("min50", True)
+              else "the 50% minimum is switched OFF: everyone is placed by marks")
+    if rl.get("min50", True) and rl.get("smallAll"):
+        rule50 += " (except events with 3 or fewer participants, where all are placed)"
+    ws.cell(row=r, column=1, value=f"Rules applied: 1st / 2nd / 3rd earn the points above; {rule50}; "
             f"Kalaprathibha / Kalathilakam need at least {ctx['award_min']} points from individual events; tied participants share the place and its points.").font = Font(size=9, color=MUTED, italic=True)
     ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=6)
     ws.cell(row=r, column=1).alignment = LEFT

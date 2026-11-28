@@ -59,7 +59,7 @@ document.addEventListener("pointerdown", () => { try { AC = AC || new (window.Au
 
 /* ================= state ================= */
 let ME = null, BOOT = null, ONLINE = true, OFFSET = 0;
-const S = { version: 0, venues: [], evo: {}, cfg: {}, est: {}, att: {}, tmr: {}, sheets: {}, jnames: {}, points: { ind: [5, 3, 1], grp: [15, 10, 5] } };
+const S = { version: 0, venues: [], evo: {}, cfg: {}, est: {}, att: {}, tmr: {}, sheets: {}, jnames: {}, rules: { min50: true, smallAll: false }, points: { ind: [5, 3, 1], grp: [15, 10, 5] } };
 const MIN_PCT = 50, AWARD_MIN = 13;  // Kalamela Manual 2026: rules 8 and 6
 const ui = { venue: "V1", sel: null, q: "", filter: "all", person: null, confirm: null, navOpen: false, findQ: "", tab: {}, judge: {} };
 let VMAP = {}, PEOPLE = {};
@@ -129,7 +129,7 @@ function results(ev) {
     rows.push({ k, en, totals, total: totals.reduce((a, b) => a + (b || 0), 0) });
   }
   const maxTot = ev.criteria.reduce((a, c) => a + (c.max || 0), 0) * ev.judges;
-  rows.forEach(r => { r.pct = maxTot ? Math.round(r.total / maxTot * 1000) / 10 : null; r.eligible = r.pct === null || r.pct >= MIN_PCT; });
+  rows.forEach(r => { r.pct = maxTot ? Math.round(r.total / maxTot * 1000) / 10 : null; r.eligible = !S.rules.min50 || (S.rules.smallAll && rows.length <= 3) || r.pct === null || r.pct >= MIN_PCT; });
   rows.sort((a, b) => (a.eligible === b.eligible ? b.total - a.total : a.eligible ? -1 : 1));
   let prev = null;
   rows.forEach((r, i) => { if (!r.eligible) { r.rank = null; return; } r.rank = prev && r.total === prev.total ? prev.rank : i + 1; prev = r; });
@@ -251,7 +251,7 @@ async function poll(force) {
   try {
     const j = await api("/api/state?v=" + (force ? 0 : S.version));
     ONLINE = true; if (j.now) OFFSET = j.now - Date.now();
-    if (j.changed) { Object.assign(S, { version: j.version, venues: j.venues, evo: j.evo, cfg: j.cfg, est: j.est, att: j.att, tmr: j.tmr, sheets: j.sheets, jnames: j.jnames || {}, points: j.points });
+    if (j.changed) { Object.assign(S, { version: j.version, venues: j.venues, evo: j.evo, cfg: j.cfg, est: j.est, att: j.att, tmr: j.tmr, sheets: j.sheets, jnames: j.jnames || {}, rules: j.rules || { min50: true, smallAll: false }, points: j.points });
       VMAP = Object.fromEntries(S.venues.map(v => [v.code, v])); render(); }
     else updateLive();
   } catch (e) { ONLINE = false; updateLive(); }
@@ -569,7 +569,7 @@ function marksPanel(ev) {
   if (j === J) {
     return head + `<div class="table-wrap"><table class="t marks"><thead><tr><th>Rank</th><th>Chest / Team</th><th>Name</th>${Array.from({ length: J }, (_, i) => `<th class="num">Judge ${i + 1}${jn(ev, i) ? `<span class="mx">${esc(jn(ev, i))}</span>` : ""}</th>`).join("")}<th class="num">Total</th><th class="num">%</th></tr></thead><tbody>
       ${res.map(r => `<tr class="${r.rank && r.rank <= 3 ? "win r" + r.rank : ""}"><td>${!r.rank ? badge("absent", "Below 50%") : r.rank <= 3 ? `<span class="medal m${r.rank}">${r.rank}</span>` : r.rank}</td><td><b>${esc(r.k)}</b></td><td>${esc(nameOf(r.en))}<div class="sub">${esc(r.en.team ? teamParish(r.en) : (PEOPLE[r.k] || {}).parish)}</div></td>${r.totals.map(x => `<td class="num">${x ?? "–"}</td>`).join("")}<td class="num"><b>${r.total}</b></td><td class="num">${r.pct ?? "–"}</td></tr>`).join("") || `<tr><td colspan="${J + 5}" class="empty">No marks entered yet.</td></tr>`}
-      </tbody></table></div><div class="card-b muted" style="font-size:12.5px">As per the Kalamela Manual, a participant needs at least ${MIN_PCT}% of the maximum marks to be placed and earn points. Points: ${S.points.ind.join(" / ")} for individual events, ${S.points.grp.join(" / ")} for group events.</div>`;
+      </tbody></table></div><div class="card-b muted" style="font-size:12.5px">${S.rules.min50 ? `As per the Kalamela Manual, a participant needs at least ${MIN_PCT}% of the maximum marks to be placed and earn points${S.rules.smallAll ? " (events with 3 or fewer participants: everyone is placed)" : ""}.` : "The 50% rule is switched off: everyone is placed by marks."} Points: ${S.points.ind.join(" / ")} for individual events, ${S.points.grp.join(" / ")} for group events.</div>`;
   }
   const crit = ev.criteria;
   return head + `<div class="jname"><label for="jn-${ev.id}-${j}">Judge ${j + 1} name</label>
@@ -648,6 +648,11 @@ function vResults() {
   const stat = (cls, lbl, val, foot) => `<div class="card stat ${cls}"><span class="lbl">${lbl}</span><span class="val">${val}</span><span class="foot">${foot}</span></div>`;
   return `
   <div class="grid-3 awards">${trophyCard(ch)}${award(ch.male, "Kalaprathibha")}${award(ch.female, "Kalathilakam")}</div>
+  <div class="card rules"><div class="card-h"><h2>${icon("gear")} Ranking rules</h2><span class="sub">Only changes how places are worked out. Attendance and marks are never changed; switch back any time.</span></div>
+    <div class="rule-list">
+      ${ruleSwitch("min50", "Below 50% gets no place", "As per the Kalamela Manual. Turn off to place everyone by marks, so a participant below 50% can still be 1st.")}
+      ${ruleSwitch("smallAll", "Place everyone in small events", "When an event has 3 or fewer participants, all of them get a place (1st, 2nd, 3rd), even below 50%.", !S.rules.min50)}
+    </div></div>
   <div class="stats four">
     ${stat("blue", "Events finished", `${done.length}<small> / ${ch.per.length}</small>`, "Finish event pressed")}
     ${stat("green", "Results complete", `${complete}<small> / ${done.length || 0}</small>`, "All judges' marks entered")}
@@ -672,6 +677,12 @@ function vResults() {
       <span class="muted">Individual</span>${[0, 1, 2].map(i => `<input class="input pts" id="pi${i}" type="number" min="0" step="0.5" value="${S.points.ind[i]}" aria-label="Individual ${i + 1} place points">`).join("")}
       <span class="muted">Group</span>${[0, 1, 2].map(i => `<input class="input pts" id="pg${i}" type="number" min="0" step="0.5" value="${S.points.grp[i]}" aria-label="Group ${i + 1} place points">`).join("")}
       <button class="btn primary sm" type="submit">Save points</button></form></div></div>`;
+}
+
+function ruleSwitch(k, title, text, disabled) {
+  const on = !!S.rules[k];
+  return `<div class="rule ${disabled ? "dis" : ""}"><div class="rule-t"><b>${title}</b><span>${text}${disabled ? " (Not needed while the 50% rule is off.)" : ""}</span></div>
+    <button class="switch ${on ? "on" : ""}" role="switch" aria-checked="${on}" aria-label="${esc(title)}" data-act="rule" data-k="${k}" ${disabled ? "disabled" : ""}><i></i></button></div>`;
 }
 
 /* ---------- events (admin) ---------- */
@@ -798,6 +809,9 @@ document.addEventListener("click", e => {
     case "close": ui.confirm = null; setEventState(E, "done"); break;
     case "reopen": setEventState(E, "live"); break;
     case "reset-ask": ui.confirm = { reset: true }; render(true); break;
+    case "rule": { const k = t.dataset.k, v = !S.rules[k]; S.rules = { ...S.rules, [k]: v }; render(true);
+      api("/api/rules", { [k]: v }).then(() => { toast(k === "min50" ? (v ? "50% rule is ON: below 50% gets no place" : "50% rule is OFF: everyone is placed by marks") : (v ? "Small events: everyone is placed" : "Small events follow the 50% rule")); return poll(true); })
+        .catch(er => { S.rules = { ...S.rules, [k]: !v }; render(true); toast(er.message, true); }); break; }
     case "ask-restart": ui.confirm = { restart: E }; render(true); break;
     case "restart": ui.confirm = null; api("/api/event-reset", { e: E }).then(() => { toast("Attendance cleared. The event is back to Not started."); ui.tab[E] = "people"; return poll(true); }).catch(er => toast(er.message, true)); break;
     case "sample-ask": ui.confirm = { sample: true }; render(true); break;

@@ -47,7 +47,8 @@ EVENT_STATES = {"upcoming", "live", "done"}
 SESSION_HOURS = 48
 DEFAULT_POINTS = {"ind": [5, 3, 1], "grp": [15, 10, 5]}  # Kalamela Manual 2026, General Instructions 7
 MIN_PERCENT = 50     # Manual 8: below 50% marks earns no points or prize
-AWARD_MIN_POINTS = 13  # Manual 6: Kalaprathibha / Kalathilakam need at least 13 points
+AWARD_MIN_POINTS = 13
+DEFAULT_RULES = {"min50": True, "smallAll": False}  # admin switches; they only change how places are worked out  # Manual 6: Kalaprathibha / Kalathilakam need at least 13 points
 
 # ------------------------------------------------------------------ seed data
 with open(os.path.join(LIB, "data.json"), encoding="utf-8") as f:
@@ -274,6 +275,13 @@ class Tx:
                 out[r["eid"]] = {}
         return out
 
+    def rules(self, cfg=None):
+        try:
+            r = json.loads((cfg or self.config()).get("rules") or "{}")
+            return {"min50": bool(r.get("min50", True)), "smallAll": bool(r.get("smallAll", False))}
+        except Exception:
+            return dict(DEFAULT_RULES)
+
     def points(self, cfg=None):
         try:
             p = json.loads((cfg or self.config()).get("points") or "{}")
@@ -294,6 +302,7 @@ class Tx:
             "sheets": self.sheets(),
             "jnames": {r["eid"]: json.loads(r["names"] or "[]") for r in self.all("SELECT eid,names FROM kl_judges")},
             "points": self.points(),
+            "rules": self.rules(),
         }
 
 
@@ -318,7 +327,7 @@ def merged_events(evo, cfg=None):
 
 
 # ------------------------------------------------------------------ results
-def event_results(ev, sheet, judges, status_of):
+def event_results(ev, sheet, judges, status_of, rules=None):
     """Rows sorted by total; rank shared on ties (1,1,3). Only entries with marks are listed.
     Manual rule 8: an entry below 50% of the maximum marks gets no rank (no points, no prize)."""
     rows = []
@@ -338,7 +347,9 @@ def event_results(ev, sheet, judges, status_of):
     maxtot = sum(c["max"] for c in ev["criteria"]) * judges
     for r in rows:
         r["pct"] = round(r["total"] / maxtot * 100, 1) if maxtot else None
-        r["eligible"] = r["pct"] is None or r["pct"] >= MIN_PERCENT
+        rl = rules or DEFAULT_RULES
+        small = rl.get("smallAll") and len(rows) <= 3      # 3 or fewer took part: all are placed
+        r["eligible"] = (not rl.get("min50", True)) or small or r["pct"] is None or r["pct"] >= MIN_PERCENT
     rows.sort(key=lambda r: (not r["eligible"], -r["total"]))
     prev = None
     for i, r in enumerate(rows):
@@ -350,11 +361,11 @@ def event_results(ev, sheet, judges, status_of):
     return rows
 
 
-def championship(evs, sheets, status_fn, points, venue_name):
+def championship(evs, sheets, status_fn, points, venue_name, rules=None):
     ind, church = {}, {}
     per_event = []
     for ev in evs:
-        res = event_results(ev, sheets.get(ev["id"]), ev["judges"], lambda k, ev=ev: status_fn(ev, k))
+        res = event_results(ev, sheets.get(ev["id"]), ev["judges"], lambda k, ev=ev: status_fn(ev, k), rules)
         pts = points["grp"] if ev["type"] == "group" else points["ind"]
         winners = []
         for r in res:
@@ -456,10 +467,11 @@ def build_workbook(snap, acts, venue_name):
         d = (tm["e"] - tm["s"]) if tm.get("s") and tm.get("e") else None
         return fmt_dur(d), bool(d and ev["timer"] and d > ev["timer"] * 60000)
 
-    champ = championship(evs, snap["sheets"], status, snap["points"], venue_name)
+    champ = championship(evs, snap["sheets"], status, snap["points"], venue_name, snap.get("rules"))
     return export.build({
         "evs": evs, "people": PEOPLE, "status": status, "took": took, "att": att, "est": est, "acts": acts,
-        "results": lambda ev: event_results(ev, snap["sheets"].get(ev["id"]), ev["judges"], lambda k: status(ev, k)),
+        "results": lambda ev: event_results(ev, snap["sheets"].get(ev["id"]), ev["judges"], lambda k: status(ev, k), snap.get("rules")),
+        "rules": snap.get("rules") or DEFAULT_RULES,
         "champ": champ, "points": snap["points"], "venue_name": venue_name, "sheets": snap["sheets"],
         "exported_at": now_iso(), "award_min": AWARD_MIN_POINTS, "jnames": snap.get("jnames", {})})
 
@@ -808,6 +820,16 @@ class Handler(BaseHTTPRequestHandler):
 
         if not admin:
             return self.json({"error": "Only the admin can do this."}, 403)
+
+        if p == "/api/rules":
+            cur = t.rules(cfg)
+            for k in ("min50", "smallAll"):
+                if k in b:
+                    cur[k] = bool(b[k])
+            t.set_config("rules", json.dumps(cur))
+            t.log(who, "Ranking rules", "", "", json.dumps(cur))
+            t.bump()
+            return self.json({"ok": True, "rules": cur})
 
         if p == "/api/points":
             try:
